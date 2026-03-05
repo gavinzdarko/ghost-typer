@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghost-typer"
+version = "1.0.0"
+description = "A macOS menu bar app that simulates human-like typing from clipboard content"
+requires-python = ">=3.10"
+dependencies = [
+    "rumps>=0.4.0",
+    "pynput>=1.7.0",
+    "pyobjc-framework-Cocoa>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+ghost-typer = "ghost_typer.run:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ghost_typer*"]
+
+[tool.setuptools.package-dir]
+ghost_typer = "."

@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghost Typer — Typing Data Collector</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+    --purple: #bc8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; padding: 24px;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  h1 span { color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 600; margin-bottom: 12px; color: var(--accent); }
+  h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+
+  /* Prompt display */
+  #prompt-display {
+    font-size: 18px; line-height: 1.7; letter-spacing: 0.3px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 120px; position: relative;
+  }
+  #prompt-display .char { transition: color 0.05s; }
+  #prompt-display .char.correct { color: var(--green); }
+  #prompt-display .char.wrong { color: var(--red); background: rgba(248,81,73,0.15); border-radius: 2px; }
+  #prompt-display .char.current { border-bottom: 2px solid var(--accent); }
+  #prompt-display .char.upcoming { color: var(--muted); }
+
+  /* Hidden input */
+  #typing-input {
+    position: absolute; opacity: 0; pointer-events: none;
+  }
+
+  /* Click hint */
+  .click-hint {
+    text-align: center; color: var(--muted); font-size: 14px;
+    padding: 8px; display: none;
+  }
+  .click-hint.visible { display: block; }
+
+  /* Live stats grid */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .stat-box {
+    background: var(--bg); border-radius: 8px; padding: 12px; text-align: center;
+  }
+  .stat-value {
+    font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Progress bar */
+  .progress-bar {
+    height: 4px; background: var(--border); border-radius: 2px;
+    margin-bottom: 16px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: var(--accent); border-radius: 2px;
+    transition: width 0.1s;
+  }
+
+  /* Summary */
+  #summary { display: none; }
+  #summary.visible { display: block; }
+
+  .summary-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  @media (max-width: 800px) { .summary-grid { grid-template-columns: 1fr; } }
+
+  .summary-section { background: var(--bg); border-radius: 8px; padding: 16px; }
+  .summary-section h3 { margin-bottom: 10px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table td { padding: 4px 8px; }
+  table td:first-child { color: var(--muted); }
+  table td:last-child { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+  table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+  .digraph-list { font-size: 12px; line-height: 1.8; }
+  .digraph-item {
+    display: inline-block; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 2px 8px; margin: 2px;
+    font-family: 'SF Mono', monospace;
+  }
+  .digraph-item .ms { color: var(--muted); font-size: 11px; }
+
+  canvas { width: 100%; border-radius: 6px; }
+
+  /* Buttons */
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 8px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); transition: all 0.15s;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .btn-primary:hover { background: #79b8ff; }
+  .btn-row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+
+  /* JSON output */
+  #json-output {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; font-family: 'SF Mono', monospace; font-size: 12px;
+    white-space: pre-wrap; max-height: 400px; overflow-y: auto;
+    display: none; margin-top: 12px; line-height: 1.6;
+  }
+  #json-output.visible { display: block; }
+
+  .copied-toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--green); color: var(--bg); padding: 10px 20px;
+    border-radius: 8px; font-weight: 600; font-size: 14px;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none;
+  }
+  .copied-toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<h1><span>Ghost Typer</span> — Typing Data Collector</h1>
+<p class="subtitle">Type the text below. Every keystroke is recorded to calibrate your typing profile.</p>
+
+<div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+
+<div class="card" id="prompt-card" tabindex="0">
+  <div id="prompt-display"></div>
+  <input type="text" id="typing-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+  <div class="click-hint visible" id="click-hint">Click here or press any key to start typing</div>
+</div>
+
+<div class="card">
+  <div class="stats-grid">
+    <div class="stat-box"><div class="stat-value" id="live-wpm">0</div><div class="stat-label">WPM</div></div>
+    <div class="stat-box"><div class="stat-value" id="live-accuracy">100%</div><div class="stat-label">Accuracy</div></div>
+    <div class="stat-box"><div class="stat-value" id="live-errors">0</div><div class="stat-label">Errors</div></div>
+    <div class="stat-box"><div class="stat-value" id="live-iki">0</div><div class="stat-label">Avg IKI (ms)</div></div>
+    <div class="stat-box"><div class="stat-value" id="live-chars">0</div><div class="stat-label">Characters</div></div>
+    <div class="stat-box"><div class="stat-value" id="live-time">0s</div><div class="stat-label">Time</div></div>
+  </div>
+</div>
+
+<div id="summary">
+  <h2>Results Summary</h2>
+
+  <div class="summary-grid">
+    <div class="summary-section">
+      <h3>Overview</h3>
+      <table id="overview-table"></table>
+    </div>
+    <div class="summary-section">
+      <h3>Keystroke Timing (IKI)</h3>
+      <table id="iki-table"></table>
+      <canvas id="iki-chart" height="150"></canvas>
+    </div>
+    <div class="summary-section">
+      <h3>Fastest Digraphs</h3>
+      <div class="digraph-list" id="fast-digraphs"></div>
+    </div>
+    <div class="summary-section">
+      <h3>Slowest Digraphs</h3>
+      <div class="digraph-list" id="slow-digraphs"></div>
+    </div>
+    <div class="summary-section">
+      <h3>Backspace Behavior</h3>
+      <table id="backspace-table"></table>
+    </div>
+    <div class="summary-section">
+      <h3>Pause Patterns</h3>
+      <table id="pause-table"></table>
+    </div>
+    <div class="summary-section">
+      <h3>Burst Typing</h3>
+      <table id="burst-table"></table>
+    </div>
+    <div class="summary-section">
+      <h3>Common Typos</h3>
+      <table id="typo-table"></table>
+    </div>
+    <div class="summary-section">
+      <h3>Error Correction</h3>
+      <table id="correction-table"></table>
+    </div>
+    <div class="summary-section">
+      <h3>Fatigue Over Time</h3>
+      <canvas id="fatigue-chart" height="150"></canvas>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="copyJSON()">Copy Ghost Typer Config JSON</button>
+    <button class="btn" onclick="showJSON()">Show Raw Data</button>
+    <button class="btn" onclick="startNewRound()">Type Again</button>
+  </div>
+  <div id="json-output"></div>
+</div>
+
+<div class="copied-toast" id="toast">Copied!</div>
+
+<script>
+// ── Prompts ──
+const PROMPTS = [
+  "The quick brown fox jumps over the lazy dog near the riverbank. She sells seashells by the seashore while the waves crash against the rocky cliffs below. Every morning, the fisherman would cast his net into the deep blue water and wait patiently for the fish to swim closer. The old lighthouse keeper climbed the spiral staircase each evening to light the beacon that guided ships safely through the fog. Children played in the meadow, chasing butterflies and picking wildflowers until the sun began to set behind the distant mountains.",
+  "Technology has changed the way we communicate with each other in remarkable ways. People can now send messages across the world in seconds, share photographs with friends and family thousands of miles away, and collaborate on projects without ever meeting face to face. However, some argue that these advances have come at a cost, as many individuals spend more time looking at screens than engaging with the people around them. Finding a healthy balance between digital connection and real world interaction remains one of the great challenges of modern life.",
+  "The ancient library contained thousands of dusty manuscripts and forgotten scrolls that had not been touched for centuries. Scholars from every corner of the kingdom would travel great distances to study within its walls, searching for knowledge that might have been lost to time. The head librarian, an elderly woman with sharp eyes and a gentle voice, could locate any volume within minutes despite the seemingly chaotic arrangement of the shelves. She believed that every book had a story beyond its pages, shaped by the hands that wrote it and the minds that read it throughout the years.",
+];
+
+// ── State ──
+let promptText = '';
+let promptChars = [];
+let typed = [];
+let started = false;
+let finished = false;
+let startTime = 0;
+
+// Raw data collection
+const keystrokes = [];       // { time, key, correct, expected, pos }
+const ikiValues = [];         // ms between consecutive keystrokes
+const digraphTimings = {};    // "th" -> [ms, ms, ...]
+const backspaceTimings = [];  // ms between consecutive backspaces
+const pauses = [];            // { duration, context, pos }
+const bursts = [];            // { length, avgIki }
+const typos = [];             // { expected, actual, pos }
+const corrections = [];       // { charsBeforeNoticing, pos }
+const wpmOverTime = [];       // { time, wpm, errorRate }
+
+let lastKeystrokeTime = 0;
+let lastBackspaceTime = 0;
+let consecutiveBackspaces = 0;
+let cursorPos = 0;
+let totalKeystrokes = 0;
+let errorKeystrokes = 0;
+let currentBurstIkis = [];
+let errorsAtPos = {};  // pos -> { expected, typed, charsAfter }
+let pendingError = null; // tracking chars typed after an error before correction
+
+// ── Init ──
+function init() {
+  promptText = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+  promptChars = promptText.split('');
+  typed = [];
+  started = false;
+  finished = false;
+  cursorPos = 0;
+  totalKeystrokes = 0;
+  errorKeystrokes = 0;
+  lastKeystrokeTime = 0;
+  lastBackspaceTime = 0;
+  consecutiveBackspaces = 0;
+  currentBurstIkis = [];
+  pendingError = null;
+  keystrokes.length = 0;
+  ikiValues.length = 0;
+  backspaceTimings.length = 0;
+  pauses.length = 0;
+  bursts.length = 0;
+  typos.length = 0;
+  corrections.length = 0;
+  wpmOverTime.length = 0;
+  Object.keys(digraphTimings).forEach(k => delete digraphTimings[k]);
+  errorsAtPos = {};
+
+  renderPrompt();
+  document.getElementById('summary').classList.remove('visible');
+  document.getElementById('json-output').classList.remove('visible');
+  document.getElementById('click-hint').classList.add('visible');
+  document.getElementById('progress-fill').style.width = '0%';
+  updateLiveStats();
+}
+
+function renderPrompt() {
+  const el = document.getElementById('prompt-display');
+  el.innerHTML = promptChars.map((ch, i) => {
+    let cls = 'char upcoming';
+    if (i < typed.length) {
+      cls = typed[i] === ch ? 'char correct' : 'char wrong';
+    } else if (i === cursorPos) {
+      cls = 'char current';
+    }
+    return `<span class="${cls}">${ch === ' ' ? '&nbsp;' : escHtml(ch)}</span>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Input handling ──
+const promptCard = document.getElementById('prompt-card');
+const typingInput = document.getElementById('typing-input');
+
+promptCard.addEventListener('click', () => { typingInput.focus(); });
+document.addEventListener('keydown', (e) => {
+  if (finished) return;
+  if (e.key === 'Tab' || e.key === 'Escape') return;
+  if (!started && e.key.length === 1) {
+    typingInput.focus();
+  }
+});
+
+typingInput.addEventListener('keydown', (e) => {
+  if (finished) return;
+  if (e.key === 'Tab' || e.key === 'Escape') return;
+  e.preventDefault();
+
+  const now = performance.now();
+
+  if (!started && (e.key.length === 1 || e.key === 'Backspace')) {
+    started = true;
+    startTime = now;
+    document.getElementById('click-hint').classList.remove('visible');
+    startLiveTimer();
+  }
+
+  if (!started) return;
+
+  const iki = lastKeystrokeTime > 0 ? now - lastKeystrokeTime : 0;
+
+  if (e.key === 'Backspace') {
+    handleBackspace(now, iki);
+  } else if (e.key.length === 1) {
+    handleChar(e.key, now, iki);
+  }
+
+  lastKeystrokeTime = now;
+  renderPrompt();
+  updateLiveStats();
+
+  // Check completion
+  if (cursorPos >= promptChars.length) {
+    finish();
+  }
+});
+
+function handleChar(key, now, iki) {
+  totalKeystrokes++;
+  const expected = promptChars[cursorPos] || '';
+  const correct = key === expected;
+
+  keystrokes.push({ time: now - startTime, key, correct, expected, pos: cursorPos });
+
+  if (iki > 0) {
+    ikiValues.push(iki);
+
+    // Digraph timing
+    if (cursorPos > 0 && cursorPos <= promptChars.length) {
+      const prev = promptChars[cursorPos - 1];
+      if (prev && prev !== ' ' && key !== ' ') {
+        const di = (prev + key).toLowerCase();
+        if (/^[a-z]{2}$/.test(di)) {
+          if (!digraphTimings[di]) digraphTimings[di] = [];
+          digraphTimings[di].push(iki);
+        }
+      }
+    }
+
+    // Pause detection (>500ms)
+    if (iki > 500) {
+      let context = 'mid-word';
+      if (cursorPos > 0 && promptChars[cursorPos - 1] === ' ') context = 'word-start';
+      if (cursorPos > 0 && '.!?'.includes(promptChars[cursorPos - 1])) context = 'after-sentence';
+      pauses.push({ duration: iki, context, pos: cursorPos });
+    }
+
+    // Burst detection
+    if (iki < 150) {
+      currentBurstIkis.push(iki);
+    } else {
+      if (currentBurstIkis.length >= 3) {
+        const avg = currentBurstIkis.reduce((a,b) => a+b, 0) / currentBurstIkis.length;
+        bursts.push({ length: currentBurstIkis.length, avgIki: avg });
+      }
+      currentBurstIkis = [];
+    }
+  }
+
+  // Track errors
+  if (!correct) {
+    errorKeystrokes++;
+    typos.push({ expected, actual: key, pos: cursorPos });
+    pendingError = { pos: cursorPos, charsAfter: 0 };
+  } else if (pendingError) {
+    pendingError.charsAfter++;
+  }
+
+  typed[cursorPos] = key;
+  cursorPos++;
+  consecutiveBackspaces = 0;
+  lastBackspaceTime = 0;
+}
+
+function handleBackspace(now, iki) {
+  if (cursorPos <= 0) return;
+
+  totalKeystrokes++;
+  keystrokes.push({ time: now - startTime, key: 'Backspace', correct: true, expected: '', pos: cursorPos });
+
+  // Track consecutive backspace timing
+  if (lastBackspaceTime > 0 && consecutiveBackspaces > 0) {
+    const bsIki = now - lastBackspaceTime;
+    backspaceTimings.push(bsIki);
+  }
+  lastBackspaceTime = now;
+  consecutiveBackspaces++;
+
+  // Track chars before noticing error
+  if (pendingError) {
+    corrections.push({ charsBeforeNoticing: pendingError.charsAfter, pos: pendingError.pos });
+    pendingError = null;
+  }
+
+  cursorPos--;
+  typed.length = cursorPos;
+}
+
+// ── Live stats ──
+let liveTimerInterval = null;
+function startLiveTimer() {
+  if (liveTimerInterval) return;
+  liveTimerInterval = setInterval(() => {
+    if (!finished) {
+      updateLiveStats();
+      recordTimeSlice();
+    }
+  }, 500);
+}
+
+function recordTimeSlice() {
+  const elapsed = (performance.now() - startTime) / 1000;
+  if (elapsed < 1) return;
+  const words = cursorPos / 5;
+  const wpm = Math.round((words / elapsed) * 60);
+  const errRate = totalKeystrokes > 0 ? errorKeystrokes / totalKeystrokes : 0;
+  // Record every 5 seconds
+  if (wpmOverTime.length === 0 || elapsed - wpmOverTime[wpmOverTime.length - 1].time >= 5) {
+    wpmOverTime.push({ time: Math.round(elapsed), wpm, errorRate: errRate });
+  }
+}
+
+function updateLiveStats() {
+  const elapsed = started ? (performance.now() - startTime) / 1000 : 0;
+  const words = cursorPos / 5;
+  const wpm = elapsed > 0 ? Math.round((words / elapsed) * 60) : 0;
+  const accuracy = totalKeystrokes > 0 ? Math.round((1 - errorKeystrokes / totalKeystrokes) * 100) : 100;
+  const avgIki = ikiValues.length > 0 ? Math.round(ikiValues.reduce((a,b) => a+b, 0) / ikiValues.length) : 0;
+
+  document.getElementById('live-wpm').textContent = wpm;
+  document.getElementById('live-accuracy').textContent = accuracy + '%';
+  document.getElementById('live-errors').textContent = errorKeystrokes;
+  document.getElementById('live-iki').textContent = avgIki;
+  document.getElementById('live-chars').textContent = cursorPos;
+  document.getElementById('live-time').textContent = Math.round(elapsed) + 's';
+  document.getElementById('progress-fill').style.width = (cursorPos / promptChars.length * 100) + '%';
+}
+
+// ── Finish ──
+function finish() {
+  finished = true;
+  if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
+  // Final time slice
+  recordTimeSlice();
+  // Flush final burst
+  if (currentBurstIkis.length >= 3) {
+    const avg = currentBurstIkis.reduce((a,b) => a+b, 0) / currentBurstIkis.length;
+    bursts.push({ length: currentBurstIkis.length, avgIki: avg });
+  }
+  updateLiveStats();
+  showSummary();
+}
+
+// ── Summary ──
+function showSummary() {
+  const elapsed = (performance.now() - startTime) / 1000;
+  const words = cursorPos / 5;
+  const wpm = Math.round((words / elapsed) * 60);
+  const accuracy = totalKeystrokes > 0 ? (1 - errorKeystrokes / totalKeystrokes) : 1;
+  const errorRate = 1 - accuracy;
+
+  // IKI stats
+  const sortedIki = [...ikiValues].sort((a,b) => a - b);
+  const ikiMean = sortedIki.length > 0 ? sortedIki.reduce((a,b) => a+b, 0) / sortedIki.length : 0;
+  const ikiMedian = sortedIki.length > 0 ? sortedIki[Math.floor(sortedIki.length / 2)] : 0;
+  const ikiStd = sortedIki.length > 1 ? Math.sqrt(sortedIki.reduce((s, v) => s + (v - ikiMean) ** 2, 0) / (sortedIki.length - 1)) : 0;
+  const ikiMin = sortedIki[0] || 0;
+  const ikiMax = sortedIki[sortedIki.length - 1] || 0;
+
+  // Backspace stats
+  const sortedBs = [...backspaceTimings].sort((a,b) => a - b);
+  const bsMedian = sortedBs.length > 0 ? sortedBs[Math.floor(sortedBs.length / 2)] : 0;
+  const bsMean = sortedBs.length > 0 ? sortedBs.reduce((a,b) => a+b, 0) / sortedBs.length : 0;
+
+  // Correction stats
+  const corrChars = corrections.map(c => c.charsBeforeNoticing);
+  const immediateCorr = corrChars.filter(c => c === 0).length;
+  const delayedCorr = corrChars.filter(c => c > 0).length;
+  const avgCharsBeforeNotice = corrChars.length > 0 ? corrChars.reduce((a,b) => a+b, 0) / corrChars.length : 0;
+
+  // Pause stats
+  const wordPauses = pauses.filter(p => p.context === 'word-start');
+  const sentencePauses = pauses.filter(p => p.context === 'after-sentence');
+  const midWordPauses = pauses.filter(p => p.context === 'mid-word');
+  const avgPause = pauses.length > 0 ? pauses.reduce((a,p) => a + p.duration, 0) / pauses.length : 0;
+
+  // Burst stats
+  const avgBurstLen = bursts.length > 0 ? bursts.reduce((a,b) => a + b.length, 0) / bursts.length : 0;
+  const avgBurstIki = bursts.length > 0 ? bursts.reduce((a,b) => a + b.avgIki, 0) / bursts.length : 0;
+
+  // Overview
+  fillTable('overview-table', [
+    ['WPM', wpm],
+    ['Time', Math.round(elapsed) + 's'],
+    ['Characters', cursorPos],
+    ['Total Keystrokes', totalKeystrokes],
+    ['Errors', errorKeystrokes],
+    ['Error Rate', (errorRate * 100).toFixed(1) + '%'],
+    ['Accuracy', (accuracy * 100).toFixed(1) + '%'],
+    ['Corrections Made', corrections.length],
+  ]);
+
+  // IKI
+  fillTable('iki-table', [
+    ['Mean', Math.round(ikiMean) + ' ms'],
+    ['Median', Math.round(ikiMedian) + ' ms'],
+    ['Std Dev', Math.round(ikiStd) + ' ms'],
+    ['Min', Math.round(ikiMin) + ' ms'],
+    ['Max', Math.round(ikiMax) + ' ms'],
+    ['Count', ikiValues.length],
+  ]);
+  drawHistogram('iki-chart', sortedIki, 'IKI Distribution (ms)', 20, 800);
+
+  // Digraphs
+  const diAvgs = {};
+  for (const [di, times] of Object.entries(digraphTimings)) {
+    if (times.length >= 2) {
+      diAvgs[di] = times.reduce((a,b) => a+b, 0) / times.length;
+    }
+  }
+  const diSorted = Object.entries(diAvgs).sort((a,b) => a[1] - b[1]);
+  const top10Fast = diSorted.slice(0, 10);
+  const top10Slow = diSorted.slice(-10).reverse();
+
+  document.getElementById('fast-digraphs').innerHTML = top10Fast.map(([di, ms]) =>
+    `<span class="digraph-item">${di} <span class="ms">${Math.round(ms)}ms</span></span>`
+  ).join('') || '<span style="color:var(--muted)">Not enough data</span>';
+
+  document.getElementById('slow-digraphs').innerHTML = top10Slow.map(([di, ms]) =>
+    `<span class="digraph-item">${di} <span class="ms">${Math.round(ms)}ms</span></span>`
+  ).join('') || '<span style="color:var(--muted)">Not enough data</span>';
+
+  // Backspace
+  fillTable('backspace-table', [
+    ['Total Backspaces', backspaceTimings.length + corrections.length],
+    ['Median BS Delay', Math.round(bsMedian) + ' ms'],
+    ['Mean BS Delay', Math.round(bsMean) + ' ms'],
+    ['Consecutive BS Sequences', corrections.length],
+  ]);
+
+  // Pauses
+  fillTable('pause-table', [
+    ['Total Pauses (>500ms)', pauses.length],
+    ['At Word Boundaries', wordPauses.length],
+    ['After Sentences', sentencePauses.length],
+    ['Mid-word', midWordPauses.length],
+    ['Avg Pause Duration', Math.round(avgPause) + ' ms'],
+    ['Longest Pause', pauses.length > 0 ? Math.round(Math.max(...pauses.map(p => p.duration))) + ' ms' : '0 ms'],
+  ]);
+
+  // Bursts
+  fillTable('burst-table', [
+    ['Burst Count', bursts.length],
+    ['Avg Burst Length', Math.round(avgBurstLen) + ' chars'],
+    ['Avg Burst IKI', Math.round(avgBurstIki) + ' ms'],
+    ['Fastest Burst IKI', bursts.length > 0 ? Math.round(Math.min(...bursts.map(b => b.avgIki))) + ' ms' : 'N/A'],
+  ]);
+
+  // Typos
+  const typoCounts = {};
+  typos.forEach(t => {
+    const k = `${t.expected} → ${t.actual}`;
+    typoCounts[k] = (typoCounts[k] || 0) + 1;
+  });
+  const typoSorted = Object.entries(typoCounts).sort((a,b) => b[1] - a[1]).slice(0, 10);
+  fillTable('typo-table', typoSorted.length > 0
+    ? typoSorted.map(([k, v]) => [k, v + 'x'])
+    : [['No typos recorded', '']]
+  );
+
+  // Corrections
+  fillTable('correction-table', [
+    ['Total Corrections', corrections.length],
+    ['Immediate (0 extra chars)', immediateCorr],
+    ['Delayed (1+ extra chars)', delayedCorr],
+    ['Avg Chars Before Noticing', avgCharsBeforeNotice.toFixed(1)],
+    ['Immediate %', corrections.length > 0 ? Math.round(immediateCorr / corrections.length * 100) + '%' : 'N/A'],
+  ]);
+
+  // Fatigue chart
+  if (wpmOverTime.length > 1) {
+    drawLineChart('fatigue-chart', wpmOverTime);
+  }
+
+  document.getElementById('summary').classList.add('visible');
+  document.getElementById('summary').scrollIntoView({ behavior: 'smooth' });
+}
+
+function fillTable(id, rows) {
+  document.getElementById(id).innerHTML = rows.map(([k, v]) =>
+    `<tr><td>${k}</td><td>${v}</td></tr>`
+  ).join('');
+}
+
+// ── Charts ──
+function drawHistogram(canvasId, data, title, binMin, binMax) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width = canvas.offsetWidth * 2;
+  const H = canvas.height = 300;
+  ctx.scale(1, 1);
+  ctx.clearRect(0, 0, W, H);
+
+  if (data.length === 0) return;
+
+  const numBins = 30;
+  const binWidth = (binMax - binMin) / numBins;
+  const bins = new Array(numBins).fill(0);
+  data.forEach(v => {
+    const idx = Math.min(numBins - 1, Math.max(0, Math.floor((v - binMin) / binWidth)));
+    bins[idx]++;
+  });
+  const maxBin = Math.max(...bins, 1);
+
+  const pad = { top: 20, right: 20, bottom: 30, left: 40 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+  const barW = plotW / numBins;
+
+  // Bars
+  bins.forEach((count, i) => {
+    const barH = (count / maxBin) * plotH;
+    const x = pad.left + i * barW;
+    const y = pad.top + plotH - barH;
+    ctx.fillStyle = 'rgba(88, 166, 255, 0.7)';
+    ctx.fillRect(x, y, barW - 1, barH);
+  });
+
+  // Axes
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, pad.top + plotH);
+  ctx.lineTo(pad.left + plotW, pad.top + plotH);
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '20px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 5; i++) {
+    const val = Math.round(binMin + (binMax - binMin) * i / 5);
+    const x = pad.left + plotW * i / 5;
+    ctx.fillText(val + '', x, H - 5);
+  }
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const val = Math.round(maxBin * i / 4);
+    const y = pad.top + plotH - plotH * i / 4;
+    ctx.fillText(val + '', pad.left - 5, y + 5);
+  }
+}
+
+function drawLineChart(canvasId, data) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width = canvas.offsetWidth * 2;
+  const H = canvas.height = 300;
+  ctx.clearRect(0, 0, W, H);
+
+  if (data.length < 2) return;
+
+  const pad = { top: 20, right: 20, bottom: 30, left: 50 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  const times = data.map(d => d.time);
+  const wpms = data.map(d => d.wpm);
+  const minT = Math.min(...times);
+  const maxT = Math.max(...times);
+  const minW = Math.min(...wpms) - 5;
+  const maxW = Math.max(...wpms) + 5;
+
+  function tx(t) { return pad.left + (t - minT) / (maxT - minT || 1) * plotW; }
+  function ty(w) { return pad.top + plotH - (w - minW) / (maxW - minW || 1) * plotH; }
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + plotH * i / 4;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+  }
+
+  // WPM line
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    const x = tx(d.time);
+    const y = ty(d.wpm);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Dots
+  data.forEach(d => {
+    ctx.fillStyle = '#58a6ff';
+    ctx.beginPath();
+    ctx.arc(tx(d.time), ty(d.wpm), 4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Error rate line (secondary axis)
+  const errs = data.map(d => d.errorRate);
+  const maxE = Math.max(...errs, 0.01);
+  ctx.strokeStyle = '#f8514966';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    const x = tx(d.time);
+    const y = pad.top + plotH - (d.errorRate / maxE) * plotH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '20px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  times.forEach(t => {
+    ctx.fillText(t + 's', tx(t), H - 5);
+  });
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const w = Math.round(minW + (maxW - minW) * (4 - i) / 4);
+    ctx.fillText(w + '', pad.left - 5, pad.top + plotH * i / 4 + 6);
+  }
+
+  // Legend
+  ctx.font = '18px -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#58a6ff';
+  ctx.fillText('— WPM', pad.left + 10, pad.top + 15);
+  ctx.fillStyle = '#f85149';
+  ctx.fillText('--- Error Rate', pad.left + 100, pad.top + 15);
+}
+
+// ── JSON export ──
+function buildConfigJSON() {
+  const elapsed = (performance.now() - startTime) / 1000;
+  const wpm = Math.round((cursorPos / 5 / elapsed) * 60);
+  const errorRate = totalKeystrokes > 0 ? errorKeystrokes / totalKeystrokes : 0;
+
+  const sortedIki = [...ikiValues].sort((a,b) => a - b);
+  const ikiMedian = sortedIki.length > 0 ? sortedIki[Math.floor(sortedIki.length / 2)] : 200;
+
+  const sortedBs = [...backspaceTimings].sort((a,b) => a - b);
+  const bsMedian = sortedBs.length > 0 ? sortedBs[Math.floor(sortedBs.length / 2)] : 50;
+
+  const corrChars = corrections.map(c => c.charsBeforeNoticing);
+  const immediateCorr = corrChars.filter(c => c === 0).length;
+  const immediatePct = corrections.length > 0 ? immediateCorr / corrections.length : 0.6;
+  const avgCharsAfter = corrChars.filter(c => c > 0);
+  const maxCharsAfter = avgCharsAfter.length > 0 ? Math.max(...avgCharsAfter) : 4;
+
+  const avgBurstLen = bursts.length > 0 ? Math.round(bursts.reduce((a,b) => a + b.length, 0) / bursts.length) : 10;
+  const maxBurstLen = bursts.length > 0 ? Math.max(...bursts.map(b => b.length)) : 15;
+
+  const sentPauses = pauses.filter(p => p.context === 'after-sentence');
+  const sentPauseAvg = sentPauses.length > 0 ? sentPauses.reduce((a,p) => a + p.duration, 0) / sentPauses.length / 1000 : 1.5;
+
+  const wordPauses = pauses.filter(p => p.context === 'word-start');
+  const longPauses = pauses.filter(p => p.duration > 2000);
+
+  // Digraph analysis for Ghost Typer
+  const diAvgs = {};
+  for (const [di, times] of Object.entries(digraphTimings)) {
+    if (times.length >= 2) diAvgs[di] = times.reduce((a,b) => a+b, 0) / times.length;
+  }
+  const diSorted = Object.entries(diAvgs).sort((a,b) => a[1] - b[1]);
+  const fastDigraphs = diSorted.slice(0, 15).map(([d]) => d);
+  const slowDigraphs = diSorted.slice(-15).map(([d]) => d);
+
+  return {
+    ghost_typer_settings: {
+      wpm: wpm,
+      wpm_variance: Math.round(wpm * 0.2),
+      error_rate: parseFloat(errorRate.toFixed(3)),
+      correction_delay_chars_min: 0,
+      correction_delay_chars_max: Math.min(maxCharsAfter, 6),
+      burst_length_min: Math.max(3, avgBurstLen - 3),
+      burst_length_max: Math.min(maxBurstLen + 2, 30),
+    },
+    measured_data: {
+      wpm,
+      total_time_seconds: Math.round(elapsed),
+      total_characters: cursorPos,
+      total_keystrokes: totalKeystrokes,
+      error_count: errorKeystrokes,
+      error_rate: parseFloat(errorRate.toFixed(4)),
+      corrections: corrections.length,
+      immediate_correction_pct: parseFloat(immediatePct.toFixed(2)),
+      iki: {
+        mean_ms: Math.round(ikiValues.reduce((a,b) => a+b, 0) / (ikiValues.length || 1)),
+        median_ms: Math.round(ikiMedian),
+        std_dev_ms: Math.round(Math.sqrt(ikiValues.reduce((s,v) => s + (v - ikiValues.reduce((a,b) => a+b, 0) / ikiValues.length) ** 2, 0) / (ikiValues.length - 1 || 1))),
+        min_ms: Math.round(sortedIki[0] || 0),
+        max_ms: Math.round(sortedIki[sortedIki.length - 1] || 0),
+      },
+      backspace: {
+        median_delay_ms: Math.round(bsMedian),
+        mean_delay_ms: Math.round(sortedBs.reduce((a,b) => a+b, 0) / (sortedBs.length || 1)),
+        total_sequences: corrections.length,
+      },
+      pauses: {
+        total: pauses.length,
+        word_boundary: wordPauses.length,
+        after_sentence: sentPauses.length,
+        avg_duration_ms: Math.round(pauses.reduce((a,p) => a + p.duration, 0) / (pauses.length || 1)),
+        sentence_pause_avg_s: parseFloat(sentPauseAvg.toFixed(2)),
+      },
+      bursts: {
+        count: bursts.length,
+        avg_length: Math.round(avgBurstLen),
+        avg_iki_ms: Math.round(bursts.reduce((a,b) => a + b.avgIki, 0) / (bursts.length || 1)),
+      },
+      fast_digraphs: fastDigraphs,
+      slow_digraphs: slowDigraphs,
+      top_typos: Object.entries(
+        typos.reduce((acc, t) => { const k = `${t.expected}->${t.actual}`; acc[k] = (acc[k]||0)+1; return acc; }, {})
+      ).sort((a,b) => b[1] - a[1]).slice(0, 10).map(([k,v]) => ({ pair: k, count: v })),
+      fatigue_curve: wpmOverTime,
+    }
+  };
+}
+
+function copyJSON() {
+  const json = JSON.stringify(buildConfigJSON(), null, 2);
+  navigator.clipboard.writeText(json).then(() => {
+    const toast = document.getElementById('toast');
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2000);
+  });
+}
+
+function showJSON() {
+  const el = document.getElementById('json-output');
+  el.textContent = JSON.stringify(buildConfigJSON(), null, 2);
+  el.classList.toggle('visible');
+}
+
+function startNewRound() {
+  init();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ── Start ──
+init();
+</script>
+</body>
+</html>

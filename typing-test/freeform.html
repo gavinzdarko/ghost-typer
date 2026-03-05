@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghost Typer — Free Typing Capture</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 24px; }
+  h1 { font-size: 24px; margin-bottom: 4px; } h1 span { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  #typing-area {
+    width: 100%; min-height: 200px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+    font-family: 'SF Mono', 'Fira Code', Consolas, monospace; font-size: 16px;
+    line-height: 1.7; resize: vertical; outline: none;
+  }
+  #typing-area:focus { border-color: var(--accent); }
+  #typing-area::placeholder { color: var(--muted); }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .stat { background: var(--bg); border-radius: 8px; padding: 10px; text-align: center; }
+  .stat-val { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+  .btn { display: inline-block; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  #json-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-family: 'SF Mono', monospace; font-size: 11px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; display: none; margin-top: 12px; line-height: 1.5; }
+  #json-box.visible { display: block; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--green); color: var(--bg); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  table td { padding: 3px 6px; } table td:first-child { color: var(--muted); } table td:last-child { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .digraph-item { display: inline-block; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; margin: 2px; font-family: 'SF Mono', monospace; font-size: 11px; }
+  .digraph-item .ms { color: var(--muted); font-size: 10px; }
+  .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 700px) { .results-grid { grid-template-columns: 1fr; } }
+  .results-section { background: var(--bg); border-radius: 8px; padding: 12px; }
+  .results-section h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<h1><span>Ghost Typer</span> — Free Typing Capture</h1>
+<p class="sub">Just type whatever you want. Stats update live. Hit "Show Results" when done.</p>
+
+<div class="card">
+  <textarea id="typing-area" placeholder="Start typing anything..." autofocus autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+</div>
+
+<div class="card">
+  <div class="stats-grid">
+    <div class="stat"><div class="stat-val" id="s-wpm">0</div><div class="stat-lbl">WPM</div></div>
+    <div class="stat"><div class="stat-val" id="s-chars">0</div><div class="stat-lbl">Chars</div></div>
+    <div class="stat"><div class="stat-val" id="s-words">0</div><div class="stat-lbl">Words</div></div>
+    <div class="stat"><div class="stat-val" id="s-bs">0</div><div class="stat-lbl">Backspaces</div></div>
+    <div class="stat"><div class="stat-val" id="s-iki">0</div><div class="stat-lbl">Avg IKI ms</div></div>
+    <div class="stat"><div class="stat-val" id="s-bsrate">0</div><div class="stat-lbl">BS Delay ms</div></div>
+    <div class="stat"><div class="stat-val" id="s-time">0s</div><div class="stat-lbl">Time</div></div>
+    <div class="stat"><div class="stat-val" id="s-pauses">0</div><div class="stat-lbl">Pauses</div></div>
+  </div>
+</div>
+
+<div class="btn-row">
+  <button class="btn btn-primary" onclick="showResults()">Show Results</button>
+  <button class="btn" onclick="copyData()">Copy JSON</button>
+  <button class="btn" onclick="reset()">Reset</button>
+</div>
+
+<div id="results" style="display:none">
+  <div class="results-grid">
+    <div class="results-section"><h3>Overview</h3><table id="t-overview"></table></div>
+    <div class="results-section"><h3>IKI Timing</h3><table id="t-iki"></table></div>
+    <div class="results-section"><h3>Backspace Behavior</h3><table id="t-bs"></table></div>
+    <div class="results-section"><h3>Pauses (>500ms)</h3><table id="t-pauses"></table></div>
+    <div class="results-section"><h3>Bursts (<150ms)</h3><table id="t-bursts"></table></div>
+    <div class="results-section"><h3>Fastest Digraphs</h3><div id="d-fast"></div></div>
+    <div class="results-section"><h3>Slowest Digraphs</h3><div id="d-slow"></div></div>
+    <div class="results-section"><h3>Ghost Typer Config</h3><table id="t-config"></table></div>
+  </div>
+</div>
+
+<div id="json-box"></div>
+<div class="toast" id="toast">Copied!</div>
+
+<script>
+let startTime = 0, started = false, lastTime = 0, lastBsTime = 0;
+let charCount = 0, bsCount = 0;
+const ikis = [], bsIkis = [], pauses = [], bursts = [];
+const digraphs = {};
+let prevChar = '', currentBurst = [], timerInterval = null;
+
+const area = document.getElementById('typing-area');
+
+area.addEventListener('keydown', e => {
+  const now = performance.now();
+  if (!started) { started = true; startTime = now; startTimer(); }
+  const iki = lastTime > 0 ? now - lastTime : 0;
+
+  if (e.key === 'Backspace') {
+    bsCount++;
+    if (lastBsTime > 0) { const d = now - lastBsTime; bsIkis.push(d); }
+    lastBsTime = now;
+    prevChar = '';
+    flushBurst();
+  } else if (e.key.length === 1) {
+    charCount++;
+    lastBsTime = 0;
+    if (iki > 0) {
+      ikis.push(iki);
+      if (iki > 500) pauses.push(iki);
+      // digraph
+      if (prevChar && /^[a-z]$/i.test(prevChar) && /^[a-z]$/i.test(e.key)) {
+        const di = (prevChar + e.key).toLowerCase();
+        if (!digraphs[di]) digraphs[di] = [];
+        digraphs[di].push(iki);
+      }
+      // burst
+      if (iki < 150) { currentBurst.push(iki); } else { flushBurst(); }
+    }
+    prevChar = e.key;
+  }
+  lastTime = now;
+  updateLive();
+});
+
+function flushBurst() {
+  if (currentBurst.length >= 3) {
+    bursts.push({ len: currentBurst.length, avg: currentBurst.reduce((a,b)=>a+b,0)/currentBurst.length });
+  }
+  currentBurst = [];
+}
+
+function startTimer() {
+  if (timerInterval) return;
+  timerInterval = setInterval(updateLive, 500);
+}
+
+function updateLive() {
+  if (!started) return;
+  const t = (performance.now() - startTime) / 1000;
+  const text = area.value;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
+  const avgIki = ikis.length > 0 ? Math.round(ikis.reduce((a,b)=>a+b,0)/ikis.length) : 0;
+  const avgBs = bsIkis.length > 0 ? Math.round(bsIkis.reduce((a,b)=>a+b,0)/bsIkis.length) : 0;
+  document.getElementById('s-wpm').textContent = wpm;
+  document.getElementById('s-chars').textContent = charCount;
+  document.getElementById('s-words').textContent = words;
+  document.getElementById('s-bs').textContent = bsCount;
+  document.getElementById('s-iki').textContent = avgIki;
+  document.getElementById('s-bsrate').textContent = avgBs;
+  document.getElementById('s-time').textContent = Math.round(t) + 's';
+  document.getElementById('s-pauses').textContent = pauses.length;
+}
+
+function med(arr) { if (!arr.length) return 0; const s = [...arr].sort((a,b)=>a-b); return s[Math.floor(s.length/2)]; }
+function avg(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
+function std(arr) { if (arr.length<2) return 0; const m=avg(arr); return Math.sqrt(arr.reduce((s,v)=>s+(v-m)**2,0)/(arr.length-1)); }
+
+function ft(id, rows) { document.getElementById(id).innerHTML = rows.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join(''); }
+
+function showResults() {
+  flushBurst();
+  const t = (performance.now() - startTime) / 1000;
+  const words = area.value.trim().split(/\s+/).filter(Boolean).length;
+  const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
+  const errRate = (charCount + bsCount) > 0 ? bsCount / (charCount + bsCount) : 0;
+
+  ft('t-overview', [
+    ['WPM', wpm], ['Time', Math.round(t)+'s'], ['Characters typed', charCount],
+    ['Words', words], ['Backspaces', bsCount],
+    ['BS / total keystrokes', (errRate*100).toFixed(1)+'%'],
+  ]);
+
+  const sI = [...ikis].sort((a,b)=>a-b);
+  ft('t-iki', [
+    ['Mean', Math.round(avg(ikis))+'ms'], ['Median', Math.round(med(ikis))+'ms'],
+    ['Std Dev', Math.round(std(ikis))+'ms'],
+    ['Min', Math.round(sI[0]||0)+'ms'], ['Max', Math.round(sI[sI.length-1]||0)+'ms'],
+    ['Count', ikis.length],
+  ]);
+
+  ft('t-bs', [
+    ['Total backspaces', bsCount],
+    ['Consecutive BS sequences', bsIkis.length],
+    ['Median BS delay', Math.round(med(bsIkis))+'ms'],
+    ['Mean BS delay', Math.round(avg(bsIkis))+'ms'],
+  ]);
+
+  ft('t-pauses', [
+    ['Pauses >500ms', pauses.length],
+    ['Avg duration', Math.round(avg(pauses))+'ms'],
+    ['Longest', Math.round(Math.max(...pauses,0))+'ms'],
+  ]);
+
+  ft('t-bursts', [
+    ['Burst count', bursts.length],
+    ['Avg burst length', Math.round(avg(bursts.map(b=>b.len)))+' chars'],
+    ['Avg burst IKI', Math.round(avg(bursts.map(b=>b.avg)))+'ms'],
+  ]);
+
+  // Digraphs
+  const diAvg = {};
+  for (const [d, ts] of Object.entries(digraphs)) { if (ts.length >= 2) diAvg[d] = avg(ts); }
+  const diSorted = Object.entries(diAvg).sort((a,b)=>a[1]-b[1]);
+  const mkDi = arr => arr.map(([d,ms])=>`<span class="digraph-item">${d} <span class="ms">${Math.round(ms)}ms</span></span>`).join('') || '<span style="color:var(--muted)">Not enough data</span>';
+  document.getElementById('d-fast').innerHTML = mkDi(diSorted.slice(0,10));
+  document.getElementById('d-slow').innerHTML = mkDi(diSorted.slice(-10).reverse());
+
+  // Config suggestion
+  const bsMed = med(bsIkis);
+  ft('t-config', [
+    ['wpm', wpm], ['wpm_variance', Math.round(wpm*0.2)],
+    ['error_rate', (errRate).toFixed(3)],
+    ['backspace_delay ~', Math.round(bsMed)+'ms'],
+    ['burst_length_min', Math.max(3, Math.round(avg(bursts.map(b=>b.len)))-2)],
+    ['burst_length_max', bursts.length ? Math.max(...bursts.map(b=>b.len))+2 : 15],
+    ['pause_duration_min', (Math.min(...pauses,1500)/1000).toFixed(1)+'s'],
+    ['pause_duration_max', (Math.max(...pauses,5000)/1000).toFixed(1)+'s'],
+  ]);
+
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+}
+
+function buildJSON() {
+  flushBurst();
+  const t = (performance.now() - startTime) / 1000;
+  const words = area.value.trim().split(/\s+/).filter(Boolean).length;
+  const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
+  const diAvg = {};
+  for (const [d, ts] of Object.entries(digraphs)) { if (ts.length >= 2) diAvg[d] = Math.round(avg(ts)); }
+  const diSorted = Object.entries(diAvg).sort((a,b)=>a[1]-b[1]);
+  return {
+    wpm, time_s: Math.round(t), chars: charCount, words, backspaces: bsCount,
+    bs_rate: parseFloat(((charCount+bsCount)>0 ? bsCount/(charCount+bsCount) : 0).toFixed(4)),
+    iki: { mean: Math.round(avg(ikis)), median: Math.round(med(ikis)), std: Math.round(std(ikis)) },
+    backspace_delay: { mean: Math.round(avg(bsIkis)), median: Math.round(med(bsIkis)) },
+    pauses: { count: pauses.length, avg_ms: Math.round(avg(pauses)) },
+    bursts: { count: bursts.length, avg_len: Math.round(avg(bursts.map(b=>b.len))), avg_iki: Math.round(avg(bursts.map(b=>b.avg))) },
+    fast_digraphs: diSorted.slice(0,10).map(([d,ms])=>({pair:d,ms})),
+    slow_digraphs: diSorted.slice(-10).reverse().map(([d,ms])=>({pair:d,ms})),
+    raw_text: area.value,
+  };
+}
+
+function copyData() {
+  navigator.clipboard.writeText(JSON.stringify(buildJSON(), null, 2)).then(() => {
+    const t = document.getElementById('toast'); t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000);
+  });
+}
+
+function reset() {
+  started = false; lastTime = 0; lastBsTime = 0; charCount = 0; bsCount = 0;
+  ikis.length = 0; bsIkis.length = 0; pauses.length = 0; bursts.length = 0;
+  Object.keys(digraphs).forEach(k => delete digraphs[k]);
+  prevChar = ''; currentBurst = [];
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  area.value = '';
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('json-box').classList.remove('visible');
+  updateLive();
+}
+</script>
+</body>
+</html>
