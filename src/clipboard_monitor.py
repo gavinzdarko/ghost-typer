@@ -65,6 +65,8 @@ class ClipboardMonitor:
         # Staged content: captured on copy, triggered on Cmd+V
         self._staged_content: Optional[ClipboardContent] = None
         self._staged_lock = threading.Lock()
+        # Immediate mode: call on_change right away (for table fill mode)
+        self._immediate_mode = False
 
     @property
     def enabled(self) -> bool:
@@ -108,12 +110,22 @@ class ClipboardMonitor:
                         content = self._read_clipboard()
                         if content and content.text.strip():
                             logger.info("Clipboard captured: %s", content)
-                            # Stage content and clear clipboard so Cmd+V won't paste
-                            with self._staged_lock:
-                                self._staged_content = content
-                            self._clear_clipboard()
-                            self._last_change_count = self._get_change_count()
-                            logger.info("Text staged — press Cmd+V to start typing")
+                            if self._immediate_mode:
+                                # Table fill mode: record and clear clipboard
+                                # so accidental Cmd+V won't paste (version history).
+                                self._clear_clipboard()
+                                self._last_change_count = self._get_change_count()
+                                try:
+                                    self._on_change(content)
+                                except Exception:
+                                    logger.exception("Error in clipboard change callback")
+                            else:
+                                # Normal mode: stage and wait for Cmd+V
+                                with self._staged_lock:
+                                    self._staged_content = content
+                                self._clear_clipboard()
+                                self._last_change_count = self._get_change_count()
+                                logger.info("Text staged — press Cmd+V to start typing")
             except Exception:
                 logger.exception("Error in clipboard monitor loop")
 

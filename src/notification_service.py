@@ -29,6 +29,13 @@ class NotificationService:
         self.webhook_url = webhook_url
         self.sound_enabled = sound_enabled
 
+    def notify_planning(self) -> None:
+        """Notify that AI planning has started."""
+        self._send_native(
+            title=f"{APP_NAME} - Planning",
+            message="Analyzing text and generating typing profile...",
+        )
+
     def notify_start(self, word_count: int) -> None:
         """Notify that typing has started."""
         message = f"Starting to type {word_count} words..."

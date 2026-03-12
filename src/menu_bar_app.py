@@ -12,6 +12,8 @@ import queue
 import threading
 from typing import Optional
 
+import AppKit
+import objc
 import rumps
 
 from .hotkey_listener import HotkeyListener
@@ -50,6 +52,29 @@ _TOGGLE_SETTINGS = [
 ]
 
 
+class _MenuDelegate(AppKit.NSObject):
+    """NSMenuDelegate that pauses typing while the dropdown is open."""
+
+    _app_ref = None  # set after init
+
+    def menuWillOpen_(self, menu) -> None:
+        app = self._app_ref
+        if app and not app._shutting_down:
+            if app.orchestrator.state == OrchestratorState.TYPING:
+                app._menu_auto_paused = True
+                app.orchestrator.pause()
+                logger.info("Auto-paused typing (menu opened)")
+
+    def menuDidClose_(self, menu) -> None:
+        app = self._app_ref
+        if app and not app._shutting_down:
+            if getattr(app, '_menu_auto_paused', False):
+                app._menu_auto_paused = False
+                if app.orchestrator.state == OrchestratorState.PAUSED:
+                    app.orchestrator.resume()
+                    logger.info("Auto-resumed typing (menu closed)")
+
+
 class GhostTyperApp(rumps.App):
     """Menu bar application for Ghost Typer."""
 
@@ -59,6 +84,15 @@ class GhostTyperApp(rumps.App):
         self.orchestrator = orchestrator
         self.orchestrator.on_state_change = self._on_state_change
         self.orchestrator.on_progress = self._on_progress
+
+        # Auto-pause tracking
+        self._menu_auto_paused = False
+
+        # Set up menu delegate to pause typing while dropdown is open
+        self._menu_delegate = _MenuDelegate.alloc().init()
+        self._menu_delegate._app_ref = self
+        # Wire it up after rumps creates the NSMenu (deferred to after super().__init__)
+        self._wire_menu_delegate()
 
         # Floating progress overlay
         self._progress_overlay = ProgressOverlay()
@@ -83,6 +117,12 @@ class GhostTyperApp(rumps.App):
         self._cancel_item = rumps.MenuItem("Cancel Current", callback=self._cancel)
         self._hotkeys_item = rumps.MenuItem("F6=Pause  Shift+F6=Stop  Ctrl+F6=On/Off")
         self._hotkeys_item.set_callback(None)
+
+        # Table fill mode
+        self._table_fill_item = rumps.MenuItem("Table Fill Mode", callback=self._toggle_table_fill)
+        self._table_run_item = rumps.MenuItem("Run Table (0 items)", callback=self._run_table_fill)
+        self.orchestrator.on_table_queue_change = self._on_table_queue_change
+
         self._quit_item = rumps.MenuItem("Quit", callback=self._quit)
 
         # Settings submenu
@@ -102,6 +142,9 @@ class GhostTyperApp(rumps.App):
             self._pause_item,
             self._cancel_item,
             None,
+            self._table_fill_item,
+            self._table_run_item,
+            None,
             self._settings_menu,
             None,
             self._hotkeys_item,
@@ -120,6 +163,15 @@ class GhostTyperApp(rumps.App):
         self._gui_queue: queue.Queue = queue.Queue()
         self._gui_timer = rumps.Timer(self._process_gui_queue, 0.1)
         self._gui_timer.start()
+
+    def _wire_menu_delegate(self) -> None:
+        """Attach the NSMenuDelegate to the status bar menu."""
+        try:
+            ns_menu = self._menu._menu  # rumps internal NSMenu
+            ns_menu.setDelegate_(self._menu_delegate)
+            logger.info("Menu delegate attached")
+        except Exception:
+            logger.exception("Failed to set up menu delegate")
 
     # ── Settings submenu ──
 
@@ -210,8 +262,6 @@ class GhostTyperApp(rumps.App):
         """Toggle the app ON/OFF."""
         if self.orchestrator.is_enabled:
             self.orchestrator.disable(blocking=False)
-            # Re-wire progress callback (cancel clears it)
-            self.orchestrator.on_progress = self._on_progress
             sender.title = "Turn ON"
             self._status_item.title = "Status: Off"
             self.icon = ICON_OFF
@@ -234,7 +284,44 @@ class GhostTyperApp(rumps.App):
     def _cancel(self, _sender: rumps.MenuItem) -> None:
         """Cancel current typing."""
         self.orchestrator.cancel(blocking=False)
-        self.orchestrator.on_progress = self._on_progress
+
+    def _toggle_table_fill(self, sender: rumps.MenuItem) -> None:
+        """Toggle table fill mode on/off."""
+        if self.orchestrator.table_fill_mode:
+            # Turn off
+            self.orchestrator.disable_table_fill()
+            sender.state = 0
+            self._table_run_item.title = "Run Table (0 items)"
+            self._status_item.title = "Status: Idle" if self.orchestrator.is_enabled else "Status: Off"
+        else:
+            # Turn on — also enable the app if it's off
+            if not self.orchestrator.is_enabled:
+                self.orchestrator.enable()
+                self._toggle_item.title = "Turn OFF"
+                self.icon = ICON_IDLE
+            self.orchestrator.enable_table_fill()
+            sender.state = 1
+            self._status_item.title = "Table Fill: 0 items queued"
+
+    def _run_table_fill(self, _sender: rumps.MenuItem) -> None:
+        """Execute the table fill queue."""
+        count = self.orchestrator.table_queue_count()
+        if count == 0:
+            return
+
+        self._table_fill_item.state = 0
+        self._table_run_item.title = "Run Table (0 items)"
+        self.orchestrator.run_table_fill(skip_columns=1)
+
+    def _on_table_queue_change(self, count: int) -> None:
+        """Update menu when table queue changes."""
+        def _update():
+            self._table_run_item.title = f"Run Table ({count} item{'s' if count != 1 else ''})" if count > 0 else "Run Table (0 items)"
+            if count > 0:
+                self._status_item.title = f"Table Fill: {count} item{'s' if count != 1 else ''} queued"
+            elif not self.orchestrator.table_fill_mode:
+                self._table_fill_item.state = 0
+        self._run_on_main(_update)
 
     def _quit(self, _sender: rumps.MenuItem) -> None:
         """Quit the application."""
@@ -273,12 +360,14 @@ class GhostTyperApp(rumps.App):
         if self._shutting_down:
             return
         self.orchestrator.cancel(blocking=False)
-        self.orchestrator.on_progress = self._on_progress
         logger.info("Emergency stop via hotkey")
 
     def _hotkey_paste(self) -> None:
         """Cmd+V pressed — trigger typing of staged clipboard content."""
         if self._shutting_down:
+            return
+        # In table fill mode, content is already queued on copy — Cmd+V is a no-op
+        if self.orchestrator.table_fill_mode:
             return
         self.orchestrator.clipboard_monitor.trigger_paste()
 
@@ -288,7 +377,6 @@ class GhostTyperApp(rumps.App):
             return
         if self.orchestrator.is_enabled:
             self.orchestrator.disable(blocking=False)
-            self.orchestrator.on_progress = self._on_progress
             def _off():
                 self._toggle_item.title = "Turn ON"
                 self._status_item.title = "Status: Off"
@@ -332,6 +420,8 @@ class GhostTyperApp(rumps.App):
                 self._status_item.title = "Status: AI Planning..."
                 self._cancel_item.set_callback(self._cancel)
                 self.icon = ICON_PLANNING
+                self._start_animation()
+                self._progress_overlay.show_planning()
 
             elif new_state == OrchestratorState.TYPING:
                 self._status_item.title = "Status: Typing..."
@@ -358,17 +448,16 @@ class GhostTyperApp(rumps.App):
 
         self._run_on_main(_update_gui)
 
-    def _on_progress(self, chars_typed: int, total_chars: int) -> None:
+    def _on_progress(self, chars_typed: int, total_chars: int, start_time: float = 0.0, estimated_total: float = 0.0) -> None:
         """Update menu bar status and floating progress overlay."""
         if total_chars <= 0:
             return
         pct = min(100, int(chars_typed / total_chars * 100))
         remaining = total_chars - chars_typed
-        wpm = self._settings_dict.get("wpm", 57)
 
         def _update():
             self._status_item.title = f"Status: Typing... {pct}% ({remaining} left)"
-            self._progress_overlay.update(chars_typed, total_chars, wpm)
+            self._progress_overlay.update(chars_typed, total_chars, start_time, estimated_total)
         self._run_on_main(_update)
 
     # ── Animation ──
@@ -391,6 +480,10 @@ class GhostTyperApp(rumps.App):
         idx = 0
         while not self._animation_stop.is_set():
             frame = frames[idx % len(frames)]
-            self._run_on_main(lambda f=frame: setattr(self, 'icon', f))
+            # Check stop flag inside the lambda to avoid overwriting the icon
+            # if _stop_animation() was called between enqueue and execution.
+            self._run_on_main(lambda f=frame: (
+                setattr(self, 'icon', f) if not self._animation_stop.is_set() else None
+            ))
             idx += 1
             self._animation_stop.wait(timeout=0.5)

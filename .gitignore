@@ -5,3 +5,5 @@ __pycache__/
 dist/
 build/
 .ghost-typer/
+*.spec.warn
+Ghost Typer.app/

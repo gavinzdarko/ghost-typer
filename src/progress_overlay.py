@@ -10,8 +10,9 @@ All methods MUST be called from the main thread (use _run_on_main in menu_bar_ap
 
 from __future__ import annotations
 
+import time
+
 import AppKit
-import objc
 
 
 # Window dimensions
@@ -36,6 +37,14 @@ class ProgressOverlay:
         self._bar_view: _ProgressBarView | None = None
         self._label: AppKit.NSTextField | None = None
         self._pct: float = 0.0
+        self._locked_total_time: float = 0.0  # once set, countdown is based on this
+        self._lock_pct: float = 0.0  # pct at which we locked
+        self._lock_time: float = 0.0  # elapsed at which we locked
+        self._last_eta_str: str = ""
+        self._start_time: float = 0.0  # typing session start (time.time())
+        self._tick_timer: AppKit.NSTimer | None = None
+        self._planning_mode: bool = False
+        self._planning_dots: int = 0
 
     def _ensure_window(self) -> bool:
         """Create the overlay window if it doesn't exist yet. Returns True if ready."""
@@ -71,7 +80,7 @@ class ProgressOverlay:
         window.setContentView_(content)
 
         bar_x = _PADDING
-        bar_w = _WIDTH - _PADDING * 2 - 80
+        bar_w = _WIDTH - _PADDING * 2 - 110
         self._bar_view = _ProgressBarView.alloc().initWithFrame_(
             AppKit.NSMakeRect(bar_x, _BAR_Y, bar_w, _BAR_HEIGHT)
         )
@@ -95,20 +104,44 @@ class ProgressOverlay:
         self._window = window
         return True
 
+    def show_planning(self) -> None:
+        """Show the overlay in planning mode with animated dots. Main thread only."""
+        if self._ensure_window():
+            self._planning_mode = True
+            self._planning_dots = 0
+            self._bar_view.setProgress_(-1.0)  # indeterminate
+            self._label.setStringValue_("Planning")
+            self._locked_total_time = 0.0
+            self._lock_pct = 0.0
+            self._lock_time = 0.0
+            self._last_eta_str = ""
+            self._start_time = 0.0
+            self._window.orderFront_(None)
+            self._start_tick_timer()
+
     def show(self) -> None:
         """Show the overlay window. Must be called on main thread."""
         if self._ensure_window():
+            self._planning_mode = False
             self._bar_view.setProgress_(0.0)
             self._label.setStringValue_("--")
+            self._locked_total_time = 0.0
+            self._lock_pct = 0.0
+            self._lock_time = 0.0
+            self._last_eta_str = ""
+            self._start_time = 0.0
             self._window.orderFront_(None)
+            self._start_tick_timer()
 
     def hide(self) -> None:
         """Hide the overlay (keeps window alive). Must be called on main thread."""
+        self._stop_tick_timer()
         if self._window:
             self._window.orderOut_(None)
 
     def destroy(self) -> None:
         """Final cleanup at app quit. After this, the overlay is unusable."""
+        self._stop_tick_timer()
         if self._window:
             self._window.orderOut_(None)
             self._window.close()
@@ -116,32 +149,107 @@ class ProgressOverlay:
             self._bar_view = None
             self._label = None
 
-    def update(self, chars_typed: int, total_chars: int, wpm: int = 57) -> None:
-        """Update progress and countdown. Must be called on main thread."""
+    def update(self, chars_typed: int, total_chars: int, start_time: float = 0.0, estimated_total: float = 0.0) -> None:
+        """Update progress bar and ETA estimate. Called from progress callback."""
         if not self._window or not self._bar_view or not self._label:
             return
 
         if total_chars <= 0:
             return
 
+        # Store start_time for the tick timer
+        if start_time > 0 and self._start_time <= 0:
+            self._start_time = start_time
+
+        # Use upfront estimate if we don't have a better one yet
+        if estimated_total > 0 and self._locked_total_time <= 0:
+            self._locked_total_time = estimated_total
+
         pct = min(1.0, chars_typed / total_chars)
         self._bar_view.setProgress_(pct)
 
-        # Calculate ETA
-        remaining_chars = total_chars - chars_typed
-        chars_per_sec = (wpm * 5) / 60 if wpm > 0 else 4.0
-        eta_sec = max(0, int(remaining_chars / chars_per_sec))
+        elapsed = time.time() - start_time if start_time > 0 else 0
 
-        if eta_sec >= 60:
-            minutes = eta_sec // 60
-            seconds = eta_sec % 60
-            self._label.setStringValue_(f"{minutes}m {seconds}s")
+        # Refine estimate once we have real typing data
+        if pct >= 0.05 and elapsed > 1:
+            new_estimate = elapsed / pct
+            # Smooth toward measured estimate (80% old, 20% new) for stability
+            self._locked_total_time = self._locked_total_time * 0.8 + new_estimate * 0.2
+
+        # Update the label
+        self._update_countdown()
+
+    def _update_planning_animation(self) -> None:
+        """Animate 'Planning...' dots during AI planning phase."""
+        if not self._label or not self._bar_view:
+            return
+        self._planning_dots = (self._planning_dots + 1) % 8
+        dots = "." * ((self._planning_dots // 2) % 4)
+        self._label.setStringValue_(f"Planning{dots}")
+        # Sweep the indeterminate bar back and forth
+        phase = self._planning_dots / 8.0
+        self._bar_view.setIndeterminatePhase_(phase)
+
+    def _update_countdown(self) -> None:
+        """Recompute and display the countdown from current wall-clock time."""
+        if not self._label or self._locked_total_time <= 0 or self._start_time <= 0:
+            return
+
+        elapsed = time.time() - self._start_time
+        remaining = max(0, self._locked_total_time - elapsed)
+        remaining_sec = int(remaining)
+
+        if remaining_sec >= 60:
+            minutes = remaining_sec // 60
+            seconds = remaining_sec % 60
+            time_str = f"{minutes}m {seconds:02d}s"
         else:
-            self._label.setStringValue_(f"{eta_sec}s")
+            time_str = f"{remaining_sec}s"
+
+        if time_str != self._last_eta_str:
+            self._last_eta_str = time_str
+            self._label.setStringValue_(time_str)
+
+    def _start_tick_timer(self) -> None:
+        """Start a 1-second NSTimer to tick the countdown independently."""
+        self._stop_tick_timer()
+        self._tick_timer = _TickHelper.alloc().init()
+        self._tick_timer._overlay = self
+        self._tick_timer.start()
+
+    def _stop_tick_timer(self) -> None:
+        """Stop the tick timer."""
+        if self._tick_timer is not None:
+            self._tick_timer.stop()
+            self._tick_timer = None
 
     @property
     def is_visible(self) -> bool:
         return self._window is not None and self._window.isVisible()
+
+
+class _TickHelper(AppKit.NSObject):
+    """NSObject subclass so NSTimer can call back via ObjC selector."""
+
+    _overlay: ProgressOverlay | None = None
+    _timer: AppKit.NSTimer | None = None
+
+    def start(self) -> None:
+        self._timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0, self, b"tick:", None, True
+        )
+
+    def stop(self) -> None:
+        if self._timer is not None:
+            self._timer.invalidate()
+            self._timer = None
+
+    def tick_(self, timer) -> None:
+        if self._overlay is not None:
+            if self._overlay._planning_mode:
+                self._overlay._update_planning_animation()
+            else:
+                self._overlay._update_countdown()
 
 
 class _RoundedBackgroundView(AppKit.NSView):
@@ -161,12 +269,25 @@ class _ProgressBarView(AppKit.NSView):
     """Custom progress bar: rounded track with filled portion."""
 
     _progress = 0.0
+    _indeterminate = False
+    _phase = 0.0
 
     def setProgress_(self, value: float) -> None:
-        self._progress = max(0.0, min(1.0, value))
+        if value < 0:
+            # Indeterminate mode
+            self._indeterminate = True
+            self._phase = 0.0
+        else:
+            self._indeterminate = False
+            self._progress = max(0.0, min(1.0, value))
+        self.setNeedsDisplay_(True)
+
+    def setIndeterminatePhase_(self, phase: float) -> None:
+        self._phase = phase
         self.setNeedsDisplay_(True)
 
     def drawRect_(self, rect):
+        import math
         bounds = self.bounds()
         radius = bounds.size.height / 2
 
@@ -179,8 +300,25 @@ class _ProgressBarView(AppKit.NSView):
         ).setFill()
         track.fill()
 
-        # Fill
-        if self._progress > 0.01:
+        if self._indeterminate:
+            # Pulsing shimmer effect
+            pulse_w = bounds.size.width * 0.35
+            center_x = self._phase * (bounds.size.width + pulse_w) - pulse_w * 0.5
+            fill_x = max(0, center_x - pulse_w / 2)
+            fill_end = min(bounds.size.width, center_x + pulse_w / 2)
+            fill_w = fill_end - fill_x
+            if fill_w > 1:
+                fill_rect = AppKit.NSMakeRect(fill_x, 0, fill_w, bounds.size.height)
+                fill_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                    fill_rect, radius, radius
+                )
+                # Purple accent for planning
+                alpha = 0.5 + 0.5 * math.sin(self._phase * math.pi)
+                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.55, 0.36, 1.0, alpha
+                ).setFill()
+                fill_path.fill()
+        elif self._progress > 0.01:
             fill_w = max(bounds.size.height, bounds.size.width * self._progress)
             fill_rect = AppKit.NSMakeRect(0, 0, fill_w, bounds.size.height)
             fill_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(

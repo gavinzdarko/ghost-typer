@@ -14,10 +14,12 @@ import time
 from enum import Enum, auto
 from typing import Optional
 
-from .ai_planner import AIPlanner, AIRewriter
+from .ai_planner import AIPlanner, AIProfileGenerator, AIRewriter
 from .clipboard_monitor import ClipboardContent, ClipboardMonitor
 from .models import (
+    AbandonWord,
     ApplyFormatting,
+    DistractionPause,
     MakeMistake,
     Pause,
     PressKey,
@@ -27,6 +29,7 @@ from .models import (
     TypeText,
     TypingAction,
     TypingPlan,
+    TypingProfile,
 )
 from .keystroke_simulator import KeystrokeSimulator
 from .notification_service import NotificationService
@@ -37,6 +40,9 @@ from .typing_planner import TypingPlanner
 from .visual_verifier import VisualVerifier
 
 logger = logging.getLogger(__name__)
+
+# Sentinel value used in the table queue to mark row boundaries
+_ROW_BREAK = "\x00__ROW_BREAK__"
 
 
 class OrchestratorState(Enum):
@@ -50,7 +56,10 @@ class OrchestratorState(Enum):
 class Orchestrator:
     """Ties together all Ghost Typer components with AI-powered planning."""
 
-    def __init__(self) -> None:
+    def __init__(self, profile: TypingProfile | None = None) -> None:
+        # Typing profile (AI-generated or defaults)
+        self._profile = profile or TypingProfile.defaults()
+
         # Load persisted settings (flat dict with both Settings fields and app-level fields)
         self._settings_dict = load_settings_dict()
         self._settings = self._build_settings(self._settings_dict)
@@ -66,15 +75,18 @@ class Orchestrator:
             start_delay=self._settings_dict.get("start_delay", 3.0),
         )
 
-        # AI components
-        self.ai_planner = AIPlanner(self._settings)
-        self.ai_rewriter = AIRewriter()
+        # AI components — use settings API key if available
+        from .settings_ui import get_api_key
+        _api_key = get_api_key() or None
+        self.ai_planner = AIPlanner(self._settings, api_key=_api_key)
+        self.ai_rewriter = AIRewriter(api_key=_api_key)
+        self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=_api_key)
         self.visual_verifier = VisualVerifier(
             enabled=self._settings_dict.get("verify_after_typing", False),
         )
 
-        # Fallback planner (rule-based)
-        self.fallback_planner = TypingPlanner(self._settings)
+        # Fallback planner (rule-based, with AI rewriter for drafts)
+        self.fallback_planner = TypingPlanner(self._settings, ai_rewriter=self.ai_rewriter)
 
         # Typing state
         self._state = OrchestratorState.IDLE
@@ -83,9 +95,20 @@ class Orchestrator:
         self._cancel_event = threading.Event()
         self._simulator: Optional[KeystrokeSimulator] = None
 
+        # Behavioral content (AI-generated, or empty dict)
+        self._behavioral_content: dict = {}
+
         # Stats
         self._current_word_count = 0
         self._typing_start_time = 0.0
+        self._total_chars = 0
+        self._chars_typed = 0
+
+        # Table fill mode
+        self._table_fill_mode = False
+        self._table_queue: list[ClipboardContent] = []
+        self._table_queue_lock = threading.Lock()
+        self.on_table_queue_change: Optional[callable] = None  # (count)
 
         # Callbacks for UI updates
         self.on_state_change: Optional[callable] = None
@@ -168,9 +191,6 @@ class Orchestrator:
                       to avoid blocking the AppKit event loop.
         """
         if self.state in (OrchestratorState.TYPING, OrchestratorState.PAUSED, OrchestratorState.PLANNING):
-            # Clear progress callback first so the dying thread can't enqueue
-            # more GUI work after we start tearing down
-            self.on_progress = None
             self._cancel_event.set()
             sim = self._simulator
             if sim:
@@ -187,6 +207,241 @@ class Orchestrator:
                 self.state = OrchestratorState.IDLE
             self.notification_service.notify_cancelled()
 
+    # ------------------------------------------------------------------
+    # Table fill mode
+    # ------------------------------------------------------------------
+
+    @property
+    def table_fill_mode(self) -> bool:
+        return self._table_fill_mode
+
+    def enable_table_fill(self) -> None:
+        """Enter table fill mode — pastes queue up instead of typing."""
+        with self._table_queue_lock:
+            self._table_queue.clear()
+        self._table_fill_mode = True
+        self.clipboard_monitor._immediate_mode = True
+        logger.info("Table fill mode ON")
+
+    def disable_table_fill(self) -> None:
+        """Exit table fill mode and clear the queue."""
+        self._table_fill_mode = False
+        self.clipboard_monitor._immediate_mode = False
+        with self._table_queue_lock:
+            self._table_queue.clear()
+        self._notify_table_queue_change(0)
+        logger.info("Table fill mode OFF")
+
+    def table_queue_count(self) -> int:
+        with self._table_queue_lock:
+            return sum(1 for item in self._table_queue if item.text != _ROW_BREAK)
+
+    def _add_to_table_queue(self, content: ClipboardContent) -> None:
+        """Add clipboard content to the table fill queue.
+
+        Supports two formats:
+        - Multiple lines with blank-line separators: each group of lines is a
+          row, each line within a group is a cell. A ROW_BREAK marker is
+          inserted between groups.
+        - Single line or lines with no blank separator: each line is one cell.
+        """
+        raw_lines = content.text.splitlines()
+
+        # Check if there are blank-line separators (row breaks)
+        has_row_breaks = any(line.strip() == "" for line in raw_lines)
+
+        items_added = 0
+        with self._table_queue_lock:
+            if has_row_breaks:
+                # Split into row groups by blank lines.
+                # Insert a ROW_BREAK between groups (not for leading/trailing
+                # blanks or consecutive blanks).
+                in_row_break = False
+                for line in raw_lines:
+                    if line.strip() == "":
+                        if not in_row_break and self._table_queue:
+                            self._table_queue.append(ClipboardContent(text=_ROW_BREAK))
+                        in_row_break = True
+                    else:
+                        self._table_queue.append(ClipboardContent(text=line.strip()))
+                        in_row_break = False
+                        items_added += 1
+                # Remove trailing row break if present
+                if self._table_queue and self._table_queue[-1].text == _ROW_BREAK:
+                    self._table_queue.pop()
+            elif len(raw_lines) > 1:
+                for line in raw_lines:
+                    stripped = line.strip()
+                    if stripped:
+                        self._table_queue.append(ClipboardContent(text=stripped))
+                        items_added += 1
+            else:
+                self._table_queue.append(content)
+                items_added = 1
+            count = sum(1 for item in self._table_queue if item.text != _ROW_BREAK)
+        logger.info("Table queue: added %d cell(s), total %d", items_added, count)
+        self._notify_table_queue_change(count)
+
+    def _notify_table_queue_change(self, count: int) -> None:
+        cb = self.on_table_queue_change
+        if cb:
+            try:
+                cb(count)
+            except Exception:
+                logger.exception("Error in table queue change callback")
+
+    def run_table_fill(self, skip_columns: int = 1) -> None:
+        """Execute all queued table items — type each one, TAB between them.
+
+        Args:
+            skip_columns: Number of pre-filled columns to skip at the start
+                          of each new row (e.g. 1 if column A has labels).
+        """
+        with self._table_queue_lock:
+            items = list(self._table_queue)
+            self._table_queue.clear()
+
+        if not items:
+            logger.warning("Table fill: nothing in queue")
+            return
+
+        self._table_fill_mode = False
+        self.clipboard_monitor._immediate_mode = False
+
+        with self._state_lock:
+            if self._state != OrchestratorState.IDLE:
+                logger.info("Can't run table fill — currently %s", self._state.name)
+                return
+            self._state = OrchestratorState.PLANNING
+
+        self._cancel_event.clear()
+        logger.info("Running table fill with %d items", len(items))
+
+        cb = self.on_state_change
+        if cb:
+            try:
+                cb(OrchestratorState.PLANNING)
+            except Exception:
+                logger.exception("Error in state change callback")
+
+        try:
+            self._typing_thread = threading.Thread(
+                target=self._table_fill_pipeline,
+                args=(items, skip_columns),
+                daemon=True,
+                name="TableFillPipeline",
+            )
+            self._typing_thread.start()
+        except Exception:
+            logger.exception("Failed to start table fill thread")
+            self.state = OrchestratorState.IDLE
+
+    def _table_fill_pipeline(self, items: list[ClipboardContent], skip_columns: int = 1) -> None:
+        """Type each queued item with TAB between them, handling row breaks.
+
+        To skip a cell (e.g. one that's already filled), copy "-" or "SKIP"
+        as the item for that position.  The tool will just TAB past it.
+        """
+        try:
+            # ── Separate items into cells and row breaks ──
+            cell_items: list[ClipboardContent | None] = []  # None = row break
+            for item in items:
+                if item.text == _ROW_BREAK:
+                    cell_items.append(None)
+                else:
+                    cell_items.append(item)
+
+            # ── Parse all cell items into segments and build combined plan ──
+            total_word_count = 0
+            cell_count = 0
+
+            self._typing_start_time = time.time()
+
+            combined_plan = TypingPlan()
+            is_first_cell = True
+
+            # Strings that mean "skip this cell" — just TAB past it
+            skip_markers = {"-", "SKIP", "skip", "—"}
+
+            for entry in cell_items:
+                if self._cancel_event.is_set():
+                    return
+
+                if entry is None:
+                    # Row break: TAB to wrap to next row, then skip pre-filled columns
+                    combined_plan.actions.append(PressKey(key="tab"))
+                    for _ in range(skip_columns):
+                        combined_plan.actions.append(
+                            Pause(duration=0.15, description="Skipping pre-filled column")
+                        )
+                        combined_plan.actions.append(PressKey(key="tab"))
+                    combined_plan.actions.append(
+                        Pause(duration=0.4, description="Moving to next row")
+                    )
+                    is_first_cell = True
+                    continue
+
+                # TAB to next cell (except before the very first cell)
+                if not is_first_cell:
+                    combined_plan.actions.append(PressKey(key="tab"))
+                    combined_plan.actions.append(
+                        Pause(duration=0.3, description="Moving to next cell")
+                    )
+                is_first_cell = False
+
+                # Check for skip marker — just TAB past this cell
+                if entry.text.strip() in skip_markers:
+                    logger.info("Skip marker found, will TAB past cell")
+                    continue
+
+                # Parse and plan this cell's typing
+                # Use simple mode: no proofreading or rewrites (arrow keys
+                # escape table cells in Google Docs).
+                segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
+                if segments and segments[0].text.strip():
+                    entry_plan = self.fallback_planner.plan(segments, simple=True)
+                    combined_plan.actions.extend(entry_plan.actions)
+                    total_word_count += sum(
+                        len(seg.text.split()) for seg in segments if seg.text.strip()
+                    )
+                cell_count += 1
+
+            self._current_word_count = total_word_count
+            self.notification_service.notify_start(self._current_word_count)
+
+            if self._cancel_event.is_set():
+                return
+
+            # ── Execute ──
+            self.state = OrchestratorState.TYPING
+            simulator = KeystrokeSimulator()
+            self._simulator = simulator
+            engine = TypingEngine(self._settings, profile=self._profile)
+
+            self._total_chars = self._count_typed_chars(combined_plan.actions)
+            self._chars_typed = 0
+            self._execute_plan(combined_plan, engine, simulator)
+
+            if self._cancel_event.is_set():
+                logger.info("Table fill cancelled")
+                return
+
+            elapsed = time.time() - self._typing_start_time
+            self.notification_service.notify_complete(self._current_word_count, elapsed)
+            logger.info(
+                "Table fill complete: %d cells, %d words in %.1f seconds",
+                cell_count, self._current_word_count, elapsed,
+            )
+
+        except Exception as e:
+            logger.exception("Error in table fill pipeline")
+            self.notification_service.notify_error(str(e))
+        finally:
+            self._simulator = None
+            self._notify_table_queue_change(0)
+            if self.state != OrchestratorState.IDLE:
+                self.state = OrchestratorState.IDLE
+
     def update_settings(self, settings_dict: dict) -> None:
         """Apply new settings from the UI."""
         self._settings_dict = settings_dict
@@ -200,14 +455,34 @@ class Orchestrator:
         )
         self.ai_planner.update_settings(self._settings)
         self.visual_verifier.enabled = settings_dict.get("verify_after_typing", False)
+
+        # Re-init AI components if API key changed
+        from .settings_ui import get_api_key
+        new_key = get_api_key() or None
+        if new_key:
+            self.ai_planner = AIPlanner(self._settings, api_key=new_key)
+            self.ai_rewriter = AIRewriter(api_key=new_key)
+            self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=new_key)
+            self.fallback_planner = TypingPlanner(self._settings, ai_rewriter=self.ai_rewriter)
+
         logger.info("Settings updated")
 
     def _on_clipboard_change(self, content: ClipboardContent) -> None:
         """Callback from clipboard monitor when new content is detected."""
+        # Table fill mode: queue instead of typing
+        if self._table_fill_mode:
+            self._add_to_table_queue(content)
+            return
+
         # Wait for any previous thread to finish before starting a new one
         old_thread = self._typing_thread
         if old_thread and old_thread.is_alive():
             old_thread.join(timeout=5.0)
+
+        # If cancel was requested, the thread may still be winding down.
+        # Wait outside the lock to avoid unsafe release/acquire.
+        if self._cancel_event.is_set() and old_thread and old_thread.is_alive():
+            old_thread.join(timeout=3.0)
 
         with self._state_lock:
             if self._state != OrchestratorState.IDLE:
@@ -241,6 +516,7 @@ class Orchestrator:
         """Run the full AI-powered typing pipeline in a background thread."""
         try:
             # State already set to PLANNING in _on_clipboard_change
+            self.notification_service.notify_planning()
 
             # ── Step 1: Parse content into segments ──
             segments = self.text_parser.parse(
@@ -262,24 +538,35 @@ class Orchestrator:
 
             # Notify start
             self.notification_service.notify_start(self._current_word_count)
-            self._typing_start_time = time.time()
 
-            # ── Step 2: Build typing plan (AI-powered or rule-based fallback) ──
-            use_ai = self._settings_dict.get("ai_enabled", True)
-            if use_ai and self.ai_planner.is_enabled:
-                logger.info("Generating AI typing plan for %d words...", self._current_word_count)
-                plan = self.ai_planner.plan(segments)
-                if plan.metadata.get("ai_generated"):
-                    logger.info(
-                        "AI plan ready: %d actions, strategy: %s",
-                        len(plan),
-                        plan.metadata.get("strategy", "N/A"),
+            # ── Step 1.5: Generate AI typing profile ──
+            full_text = "".join(seg.text for seg in segments)
+            if self.ai_profile_generator.is_enabled:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    profile_future = pool.submit(
+                        self.ai_profile_generator.generate_profile, full_text
                     )
-                else:
-                    logger.info("Fell back to rule-based plan: %d actions", len(plan))
+                    behavioral_future = pool.submit(
+                        self.ai_profile_generator.generate_behavioral_content, full_text
+                    )
+                    self._profile = profile_future.result(timeout=35)
+                    self._behavioral_content = behavioral_future.result(timeout=50)
+                logger.info("AI profile generated: %s", self._profile.persona_description)
             else:
-                logger.info("Using rule-based planner")
-                plan = self.fallback_planner.plan(segments)
+                self._profile = TypingProfile.defaults()
+                self._behavioral_content = {}
+
+            if self._cancel_event.is_set():
+                return
+
+            # ── Step 2: Build typing plan ──
+            # Always use rule-based planner — it handles rewrites, human errors,
+            # and misspellings reliably. AI planner is available but its rewrite
+            # generation is inconsistent.
+            logger.info("Using rule-based planner")
+            self.fallback_planner.profile = self._profile
+            plan = self.fallback_planner.plan(segments, behavioral_content=self._behavioral_content)
 
             if self._cancel_event.is_set():
                 return
@@ -288,10 +575,29 @@ class Orchestrator:
             self.state = OrchestratorState.TYPING
             simulator = KeystrokeSimulator()
             self._simulator = simulator
-            engine = TypingEngine(self._settings)
+            engine = TypingEngine(self._settings, profile=self._profile)
 
-            self._total_chars = plan.total_characters
+            # Count ALL characters that will actually be typed (including
+            # drafts in rewrites, corrections in mistakes, proofreading fixes)
+            self._total_chars = self._count_typed_chars(plan.actions)
             self._chars_typed = 0
+            self._typing_start_time = time.time()
+
+            # Calculate upfront ETA so the user knows immediately how long it'll take.
+            # Average word = 5 chars; WPM → chars per second, plus overhead for
+            # pauses, mistakes, rewrites (~40% overhead).
+            wpm = self._settings.wpm or 60
+            chars_per_sec = (wpm * 5.0) / 60.0
+            self._estimated_total_time = (self._total_chars / chars_per_sec) * 1.4
+
+            # Send initial progress so overlay shows ETA from the start
+            progress_cb = self.on_progress
+            if progress_cb:
+                try:
+                    progress_cb(0, self._total_chars, self._typing_start_time, self._estimated_total_time)
+                except Exception:
+                    pass
+
             self._execute_plan(plan, engine, simulator)
 
             if self._cancel_event.is_set():
@@ -310,6 +616,10 @@ class Orchestrator:
                     )
 
             # ── Step 5: Notify completion ──
+            if self._cancel_event.is_set():
+                logger.info("Typing pipeline cancelled")
+                return
+
             elapsed = time.time() - self._typing_start_time
             ai_tag = " (AI-planned)" if plan.metadata.get("ai_generated") else ""
             self.notification_service.notify_complete(self._current_word_count, elapsed)
@@ -342,8 +652,16 @@ class Orchestrator:
                 prev_char = self._execute_type_text(action, engine, simulator, prev_char)
 
             elif isinstance(action, ApplyFormatting):
+                p = self._profile
                 simulator.hotkey(*action.shortcut)
-                simulator.wait(0.1)
+                # Navigation hotkeys (word jump) are faster than formatting toggles
+                if action.shortcut[-1] in ("left", "right"):
+                    simulator.wait(engine._rng.uniform(
+                        p.orchestration.navigation_hotkey_pause.min,
+                        p.orchestration.navigation_hotkey_pause.max,
+                    ))
+                else:
+                    simulator.wait(p.orchestration.formatting_hotkey_pause)
 
             elif isinstance(action, Pause):
                 simulator.wait(action.duration)
@@ -352,14 +670,28 @@ class Orchestrator:
                 prev_char = self._execute_mistake(action, engine, simulator, prev_char)
 
             elif isinstance(action, Rewrite):
-                self._execute_rewrite(action, engine, simulator)
-                prev_char = action.new_text[-1] if action.new_text else prev_char
+                prev_char = self._execute_rewrite(action, engine, simulator)
 
             elif isinstance(action, PressKey):
+                p = self._profile
                 simulator.press_key(action.key)
-                delay = engine.delay_for_keystroke("\n", prev_char)
-                simulator.wait(delay)
-                prev_char = ""
+                if action.key in ("left", "right", "up", "down"):
+                    # Arrow keys are pressed rapidly when navigating
+                    simulator.wait(engine._rng.uniform(
+                        p.orchestration.arrow_key_pause.min,
+                        p.orchestration.arrow_key_pause.max,
+                    ))
+                else:
+                    delay = engine.delay_for_keystroke("\n", prev_char)
+                    simulator.wait(delay)
+                    prev_char = ""
+
+            elif isinstance(action, DistractionPause):
+                simulator.wait(action.duration)
+                engine.recover_fatigue_during_pause(action.duration)
+
+            elif isinstance(action, AbandonWord):
+                prev_char = self._execute_abandon_word(action, engine, simulator, prev_char)
 
     def _execute_type_text(
         self, action: TypeText, engine: TypingEngine, simulator: KeystrokeSimulator, prev_char: str
@@ -374,7 +706,7 @@ class Orchestrator:
                 simulator.wait(engine.peek_pause_duration())
                 engine.on_peek()
 
-            delay = engine.delay_for_keystroke(char, prev_char)
+            delay = engine.delay_for_keystroke(char, prev_char) * action.speed_multiplier
             simulator.wait(delay)
             simulator.type_char(char)
             engine.on_char_typed(char)
@@ -382,10 +714,11 @@ class Orchestrator:
 
             # Report progress every few characters
             self._chars_typed += 1
+            p = self._profile
             progress_cb = self.on_progress  # snapshot to avoid TOCTOU
-            if self._chars_typed % 5 == 0 and progress_cb:
+            if self._chars_typed % p.orchestration.progress_report_frequency == 0 and progress_cb and not self._cancel_event.is_set():
                 try:
-                    progress_cb(self._chars_typed, self._total_chars)
+                    progress_cb(self._chars_typed, self._total_chars, self._typing_start_time)
                 except Exception:
                     pass
 
@@ -395,6 +728,8 @@ class Orchestrator:
         self, action: MakeMistake, engine: TypingEngine, simulator: KeystrokeSimulator, prev_char: str
     ) -> str:
         """Execute a mistake: type wrong text, pause, backspace, type correct text."""
+        is_quick = len(action.wrong_text) <= 2  # quick reflex correction
+
         # Type the wrong text
         for char in action.wrong_text:
             if self._cancel_event.is_set() or not simulator.is_active:
@@ -402,62 +737,200 @@ class Orchestrator:
             delay = engine.delay_for_keystroke(char, prev_char)
             simulator.wait(delay)
             simulator.type_char(char)
+            engine.on_char_typed(char)
             prev_char = char
+            self._chars_typed += 1
 
         # Pause as if noticing the mistake
-        correction_pause = engine.correction_pause_duration()
-        simulator.wait(correction_pause)
+        p = self._profile
+        if is_quick:
+            simulator.wait(engine._rng.uniform(
+                p.correction.quick_correction_pause.min,
+                p.correction.quick_correction_pause.max,
+            ))
+        else:
+            simulator.wait(engine.correction_pause_duration())
 
-        # Backspace to delete the wrong text (accelerating)
+        # Backspace to delete the wrong text
         for i in range(len(action.wrong_text)):
             if self._cancel_event.is_set() or not simulator.is_active:
                 return prev_char
-            simulator.wait(engine.backspace_delay(nth_backspace=i))
+            if is_quick:
+                simulator.wait(engine._rng.uniform(
+                    p.correction.quick_backspace_delay.min,
+                    p.correction.quick_backspace_delay.max,
+                ))
+            else:
+                simulator.wait(engine.backspace_delay(nth_backspace=i))
             simulator.press_key("backspace")
 
-        # Small pause before retyping
-        simulator.wait(engine.correction_pause_duration() * 0.5)
+        # Brief pause before retyping
+        if is_quick:
+            simulator.wait(engine._rng.uniform(
+                p.correction.quick_pre_retype_pause.min,
+                p.correction.quick_pre_retype_pause.max,
+            ))
+        else:
+            simulator.wait(engine.correction_pause_duration() * 0.5)
 
-        # Type the correct text (with post-error slowdown)
+        # Type the correct text
         engine.on_error_corrected()
         for char in action.correct_text:
             if self._cancel_event.is_set() or not simulator.is_active:
                 return prev_char
-            delay = engine.delay_for_keystroke(char, prev_char)
-            simulator.wait(delay)
+            if is_quick:
+                simulator.wait(engine._rng.uniform(
+                    p.correction.quick_retype_delay.min,
+                    p.correction.quick_retype_delay.max,
+                ))
+            else:
+                delay = engine.delay_for_keystroke(char, prev_char)
+                simulator.wait(delay)
             simulator.type_char(char)
             engine.on_char_typed(char)
             prev_char = char
+            self._chars_typed += 1
 
         return prev_char
 
     def _execute_rewrite(
         self, action: Rewrite, engine: TypingEngine, simulator: KeystrokeSimulator
-    ) -> None:
-        """Execute a rewrite: backspace delete_count chars, then type new_text."""
+    ) -> str:
+        """Execute a rewrite: backspace delete_count chars, then execute new_actions.
+
+        Returns the last character typed (for prev_char tracking).
+        """
         # Pause as if reconsidering
         simulator.wait(engine.correction_pause_duration())
 
         # Delete back (accelerating)
         for i in range(action.delete_count):
             if self._cancel_event.is_set() or not simulator.is_active:
-                return
+                return ""
             simulator.wait(engine.backspace_delay(nth_backspace=i))
             simulator.press_key("backspace")
 
         # Small pause before retyping
         simulator.wait(engine.correction_pause_duration() * 0.3)
 
-        # Retype
+        # Execute new_actions (which may contain nested Rewrites)
         prev_char = ""
-        for char in action.new_text:
+        for sub_action in action.new_actions:
             if self._cancel_event.is_set() or not simulator.is_active:
-                return
+                return prev_char
+            prev_char = self._execute_action(sub_action, engine, simulator, prev_char)
+
+        return prev_char
+
+    def _execute_action(
+        self, action: TypingAction, engine: TypingEngine,
+        simulator: KeystrokeSimulator, prev_char: str,
+    ) -> str:
+        """Execute a single action and return the last character typed."""
+        if isinstance(action, TypeText):
+            return self._execute_type_text(action, engine, simulator, prev_char)
+        elif isinstance(action, Rewrite):
+            return self._execute_rewrite(action, engine, simulator)
+        elif isinstance(action, Pause):
+            simulator.wait(action.duration)
+            return prev_char
+        elif isinstance(action, MakeMistake):
+            return self._execute_mistake(action, engine, simulator, prev_char)
+        elif isinstance(action, ApplyFormatting):
+            p = self._profile
+            simulator.hotkey(*action.shortcut)
+            if action.shortcut[-1] in ("left", "right"):
+                simulator.wait(engine._rng.uniform(
+                    p.orchestration.navigation_hotkey_pause.min,
+                    p.orchestration.navigation_hotkey_pause.max,
+                ))
+            else:
+                simulator.wait(p.orchestration.formatting_hotkey_pause)
+            return prev_char
+        elif isinstance(action, PressKey):
+            p = self._profile
+            simulator.press_key(action.key)
+            if action.key in ("left", "right", "up", "down"):
+                simulator.wait(engine._rng.uniform(
+                    p.orchestration.arrow_key_pause.min,
+                    p.orchestration.arrow_key_pause.max,
+                ))
+            else:
+                delay = engine.delay_for_keystroke("\n", prev_char)
+                simulator.wait(delay)
+            return "" if action.key not in ("left", "right", "up", "down") else prev_char
+        elif isinstance(action, DistractionPause):
+            simulator.wait(action.duration)
+            engine.recover_fatigue_during_pause(action.duration)
+            return prev_char
+        elif isinstance(action, AbandonWord):
+            return self._execute_abandon_word(action, engine, simulator, prev_char)
+        return prev_char
+
+    def _execute_abandon_word(
+        self, action: AbandonWord, engine: TypingEngine,
+        simulator: KeystrokeSimulator, prev_char: str,
+    ) -> str:
+        """Type partial word, pause, delete it, type replacement."""
+        # Type partial word
+        for char in action.partial_text:
+            if self._cancel_event.is_set():
+                return prev_char
             delay = engine.delay_for_keystroke(char, prev_char)
             simulator.wait(delay)
             simulator.type_char(char)
             engine.on_char_typed(char)
             prev_char = char
+            self._chars_typed += 1
+
+        # Pause (reconsidering)
+        p = self._profile
+        simulator.wait(engine._rng.uniform(
+            p.behaviors.abandonment.pause_before_delete.min,
+            p.behaviors.abandonment.pause_before_delete.max,
+        ))
+
+        # Backspace
+        for i in range(len(action.partial_text)):
+            if self._cancel_event.is_set():
+                return prev_char
+            simulator.wait(engine.backspace_delay(nth_backspace=i))
+            simulator.press_key("backspace")
+
+        # Brief pause before replacement
+        simulator.wait(engine._rng.uniform(
+            p.behaviors.abandonment.pause_before_replacement.min,
+            p.behaviors.abandonment.pause_before_replacement.max,
+        ))
+
+        # Type replacement
+        for char in action.replacement_text:
+            if self._cancel_event.is_set():
+                return prev_char
+            delay = engine.delay_for_keystroke(char, prev_char)
+            simulator.wait(delay)
+            simulator.type_char(char)
+            engine.on_char_typed(char)
+            prev_char = char
+            self._chars_typed += 1
+
+        return prev_char
+
+    def _count_typed_chars(self, actions: list) -> int:
+        """Recursively count all characters that will be typed in a list of actions."""
+        total = 0
+        for a in actions:
+            if isinstance(a, TypeText):
+                total += len(a.text)
+            elif isinstance(a, MakeMistake):
+                total += len(a.wrong_text) + len(a.correct_text)
+            elif isinstance(a, Rewrite):
+                total += self._count_typed_chars(a.new_actions)
+            elif isinstance(a, AbandonWord):
+                total += len(a.partial_text) + len(a.replacement_text)
+            elif isinstance(a, DistractionPause):
+                pass  # No characters typed
+        return total
 
     @staticmethod
     def _build_settings(d: dict) -> Settings:

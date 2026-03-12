@@ -23,14 +23,14 @@ SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 # plus app-level settings (start_delay, webhook_url, sound_enabled)
 DEFAULTS = {
     # Engine settings (must match Settings dataclass in models.py)
-    "wpm": 57,
-    "error_rate": 0.035,
+    "wpm": 60,
+    "error_rate": 0.12,
     "pause_frequency": 0.15,
     "pause_duration_min": 0.3,
     "pause_duration_max": 4.0,
     "fatigue_enabled": True,
     "burst_typing_enabled": True,
-    "rewrite_probability": 0.07,
+    "rewrite_max_probability": 0.85,
     # App-level settings (not in Settings dataclass, handled by orchestrator)
     "start_delay": 3.0,
     "webhook_url": "",
@@ -38,6 +38,7 @@ DEFAULTS = {
     # AI settings
     "ai_enabled": True,
     "verify_after_typing": False,
+    "anthropic_api_key": "",
     # Human error settings
     "grammar_error_rate": 0.15,
     "punctuation_error_rate": 0.20,
@@ -55,6 +56,20 @@ def load_settings_dict() -> dict:
         except Exception:
             logger.exception("Failed to load settings file, using defaults")
     return settings
+
+
+def get_api_key() -> str:
+    """Get the Anthropic API key: settings first, then .env, then env var.
+
+    Priority:
+    1. ~/.ghost-typer/settings.json  (anthropic_api_key field)
+    2. ANTHROPIC_API_KEY environment variable (includes .env via python-dotenv)
+    """
+    settings = load_settings_dict()
+    key = settings.get("anthropic_api_key", "").strip()
+    if key:
+        return key
+    return os.environ.get("ANTHROPIC_API_KEY", "")
 
 
 def save_settings_dict(settings: dict) -> None:
@@ -133,7 +148,7 @@ class SettingsWindow:
 
         row = self._add_checkbox(main, row, "Fatigue Simulation", "fatigue_enabled", settings["fatigue_enabled"])
         row = self._add_checkbox(main, row, "Burst Typing", "burst_typing_enabled", settings["burst_typing_enabled"])
-        row = self._add_slider(main, row, "Rewrite Probability", "rewrite_probability", 0.0, 0.15, settings["rewrite_probability"], resolution=0.005)
+        row = self._add_slider(main, row, "Rewrite Probability", "rewrite_max_probability", 0.0, 1.0, settings["rewrite_max_probability"], resolution=0.01)
 
         # --- AI ---
         ttk.Separator(main, orient="horizontal").grid(row=row, column=0, columnspan=3, sticky="ew", pady=10)
@@ -144,6 +159,14 @@ class SettingsWindow:
         row += 1
         row = self._add_checkbox(main, row, "AI-Powered Typing Plans", "ai_enabled", settings.get("ai_enabled", True))
         row = self._add_checkbox(main, row, "Verify After Typing (OCR)", "verify_after_typing", settings.get("verify_after_typing", False))
+
+        # API Key field
+        ttk.Label(main, text="API Key:").grid(row=row, column=0, sticky="w", pady=2)
+        api_key_var = tk.StringVar(value=settings.get("anthropic_api_key", ""))
+        self._vars["anthropic_api_key"] = api_key_var
+        api_key_entry = ttk.Entry(main, textvariable=api_key_var, width=40, show="*")
+        api_key_entry.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(5, 0))
+        row += 1
 
         # --- General ---
         ttk.Separator(main, orient="horizontal").grid(row=row, column=0, columnspan=3, sticky="ew", pady=10)

@@ -56,6 +56,7 @@ class VisualVerifier:
         Returns:
             Path to the saved screenshot, or None on failure.
         """
+        path = None
         try:
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
             tmp.close()
@@ -72,6 +73,11 @@ class VisualVerifier:
             return Path(path)
         except Exception:
             logger.exception("Failed to capture screenshot")
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except Exception:
+                    pass
             return None
 
     def extract_text(self, image_path: Path) -> Optional[str]:

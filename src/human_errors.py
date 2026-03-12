@@ -1,241 +1,84 @@
-"""Human-realistic typos, misspellings, and grammar errors.
+"""AI-powered human-realistic typos, misspellings, and grammar errors.
 
-Provides three error types that mimic real human typing:
-1. Common misspellings (teh -> the, wierd -> weird, etc.)
-2. Adjacent-key misclicks (QWERTY proximity errors)
-3. Teen grammar/punctuation errors (your/you're, there/their, etc.)
+Uses Claude to generate contextually appropriate errors that mimic
+a real teenager's typing — grammar mistakes, punctuation errors,
+textese leaks, and misspellings. No hardcoded word lists or patterns.
 """
 
 from __future__ import annotations
 
-import random
+import json
+import logging
+import os
 import re
 from typing import Optional
 
-# ── 1. Common human misspellings ──
-# word -> list of plausible misspellings a human would make
-COMMON_MISSPELLINGS: dict[str, list[str]] = {
-    "the": ["teh", "hte", "th"],
-    "that": ["taht", "tath"],
-    "this": ["tihs", "thsi"],
-    "they": ["tehy", "thye"],
-    "their": ["thier", "theri"],
-    "there": ["theer", "tehre"],
-    "these": ["thees", "tehse"],
-    "them": ["tehm", "thme"],
-    "then": ["tehn", "hten"],
-    "than": ["tahn", "htan"],
-    "think": ["thikn", "thnk"],
-    "thing": ["thign", "tihng"],
-    "things": ["thigns", "tihngs"],
-    "through": ["throught", "throuhg", "trhough"],
-    "thought": ["thougth", "thougt"],
-    "though": ["thougth", "thouhg"],
-    "would": ["woudl", "wuold", "wolud"],
-    "could": ["coudl", "cuold"],
-    "should": ["shoudl", "shuold"],
-    "about": ["baout", "abotu", "abuot"],
-    "because": ["becuase", "becasue", "beacuse"],
-    "before": ["beofre", "befoer"],
-    "after": ["aftre", "atfer"],
-    "again": ["agian", "agin"],
-    "against": ["agianst", "aganist"],
-    "actually": ["acutally", "actualy"],
-    "always": ["alwyas", "alwasy"],
-    "another": ["anohter", "anotehr"],
-    "around": ["aroudn", "aorund"],
-    "available": ["avaliable", "avaialble"],
-    "between": ["bewteen", "betwen"],
-    "different": ["diffrent", "diferent", "differnt"],
-    "does": ["dose", "deos"],
-    "during": ["durign", "druign"],
-    "enough": ["enouhg", "enought"],
-    "every": ["evrey", "eveyr"],
-    "example": ["exmaple", "exapmle"],
-    "experience": ["experiance", "expereince"],
-    "first": ["frist", "fisrt"],
-    "friend": ["freind", "firend"],
-    "from": ["form", "fomr", "frome"],
-    "going": ["goign", "giong"],
-    "great": ["gerat", "graet"],
-    "have": ["ahve", "hvae"],
-    "here": ["heer", "ehre"],
-    "just": ["jsut", "juts"],
-    "know": ["knwo", "konw"],
-    "like": ["liek", "lkie"],
-    "little": ["littel", "litle"],
-    "look": ["lokk", "loook"],
-    "make": ["maek", "mkae"],
-    "many": ["mny", "mnay"],
-    "more": ["moer", "mroe"],
-    "much": ["muhc", "mcuh"],
-    "never": ["nver", "nevr"],
-    "only": ["olny", "onyl"],
-    "other": ["ohter", "otehr"],
-    "over": ["oevr", "voer"],
-    "people": ["poeple", "peopel", "ppl"],
-    "place": ["palce", "plcae"],
-    "probably": ["probalby", "probaly", "prolly"],
-    "really": ["realy", "relly", "raelly"],
-    "right": ["rigth", "rihgt"],
-    "said": ["siad", "sadi"],
-    "same": ["smae", "saem"],
-    "since": ["sinec", "sicne"],
-    "some": ["soem", "smoe"],
-    "something": ["somethign", "somehting"],
-    "sometimes": ["sometimse", "soetimes"],
-    "still": ["sitll", "stlil"],
-    "take": ["taek", "tkae"],
-    "time": ["tiem", "tmie"],
-    "together": ["togehter", "togather"],
-    "too": ["tto", "oto"],
-    "until": ["untill", "unitl"],
-    "very": ["vrey", "vrey"],
-    "want": ["wnat", "watn"],
-    "water": ["watre", "waetr"],
-    "well": ["wlel", "weell"],
-    "were": ["wree", "weer"],
-    "what": ["waht", "whta"],
-    "when": ["wehn", "whne"],
-    "where": ["wehre", "whree"],
-    "which": ["whihc", "wich"],
-    "while": ["whiel", "whlile"],
-    "with": ["wiht", "wtih"],
-    "work": ["wrok", "owrk"],
-    "world": ["wrold", "wolrd"],
-    "write": ["wirte", "wrtie"],
-    "writing": ["wirting", "wrtiting"],
-    "your": ["yuor", "yoru"],
-    "also": ["aslo", "alse"],
-    "even": ["eevn", "evne"],
-    "come": ["ocme", "coem"],
-    "back": ["bakc", "abck"],
-    "good": ["godo", "goood"],
-    "need": ["nede", "neeed"],
-    "being": ["beingg", "beign"],
-    "into": ["itno", "inot"],
-    "most": ["msot", "mots"],
-    "each": ["eahc", "ecah"],
-    "made": ["maed", "mdae"],
-    "done": ["dnoe", "donn"],
-    "keep": ["kepe", "keeep"],
-    "help": ["hlep", "hepl"],
-    "sure": ["srue", "suer"],
-    "feel": ["fele", "fele"],
-    "start": ["strat", "steart"],
-    "might": ["migth", "mihgt"],
-    "already": ["alredy", "alreayd"],
-    "believe": ["beleive", "belive"],
-    "receive": ["recieve", "recive"],
-    "definitely": ["definately", "definitly", "defintely"],
-    "necessary": ["neccessary", "necessery", "neccesary"],
-    "separate": ["seperate", "seprate"],
-    "environment": ["enviroment", "enviornment"],
-    "government": ["goverment", "govenment"],
-    "tomorrow": ["tommorow", "tomorow"],
-    "wednesday": ["wendsday", "wensday"],
-    "beautiful": ["beautifull", "beatiful"],
-    "beginning": ["begining", "beggining"],
-    "remember": ["remeber", "remmeber"],
-    "occurred": ["occured", "ocurred"],
-    "immediately": ["immediatly", "imediately"],
-    "apparently": ["apparantly", "aparently"],
-    "interesting": ["intresting", "intersting"],
-    "especially": ["especailly", "espically"],
+import anthropic
+from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
+
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+
+HUMAN_ERRORS_SYSTEM_PROMPT = """\
+You are simulating a 16-year-old student's typing errors. Given text that a teen \
+is about to type for a school assignment, you produce TWO things:
+
+1. **modified_text**: The text with realistic permanent errors baked in — errors \
+the teen would NOT notice or fix. These include:
+   - Grammar errors: your/you're confusion, their/there/they're, its/it's, \
+"could of" instead of "could have", "alot", than/then confusion, etc.
+   - Punctuation errors: missing apostrophes in contractions (dont, cant, wont, im), \
+missing commas before conjunctions, run-on sentences, comma splices, lowercase "i", \
+missing commas after introductory phrases.
+   - Textese leaks: occasional "bc" for because, "tbh", "rn", "idk", "gonna", \
+"wanna", "prolly", "thru" — but very sparingly (only ~1-2 per page max).
+   - Keep these errors SUBTLE and SPARSE — a real teen doesn't make errors on \
+every sentence. Maybe 2-5 permanent errors per paragraph depending on length.
+
+2. **misspellings**: A list of words the teen will type wrong but then NOTICE and \
+FIX (backspace and retype). These are temporary keystroke errors like:
+   - Transpositions: "teh" for "the", "taht" for "that"
+   - Letter swaps: "becuase" for "because"
+   - Doubled letters: "goood" for "good"
+   - Skipped letters: "thnk" for "think"
+   - Pick ~3-8% of words to misspell, focusing on longer and less common words.
+
+Return a JSON object with this EXACT structure:
+{
+  "modified_text": "the full text with permanent errors applied",
+  "misspellings": [
+    {"wrong": "teh", "correct": "the", "position": 0},
+    {"wrong": "becuase", "correct": "because", "position": 45}
+  ]
 }
 
-# ── 2. Teen grammar/punctuation errors ──
-# (wrong_word, correct_word, context_hint)
-# context_hint helps decide when to apply: "before_verb" means wrong form before a verb, etc.
-GRAMMAR_SWAPS: list[dict] = [
-    # your / you're
-    {"find": r"\byou're\b", "replace": "your", "prob": 0.3},
-    {"find": r"\byou are\b", "replace": "your", "prob": 0.15},
-    # their / there / they're
-    {"find": r"\bthey're\b", "replace": "their", "prob": 0.25},
-    {"find": r"\bthere\b(?=\s+(?:is|are|was|were|will|would|could|should))", "replace": "their", "prob": 0.15},
-    # its / it's
-    {"find": r"\bit's\b", "replace": "its", "prob": 0.3},
-    {"find": r"\bit is\b", "replace": "its", "prob": 0.15},
-    # could have / could of
-    {"find": r"\bcould have\b", "replace": "could of", "prob": 0.4},
-    {"find": r"\bwould have\b", "replace": "would of", "prob": 0.4},
-    {"find": r"\bshould have\b", "replace": "should of", "prob": 0.4},
-    {"find": r"\bcould've\b", "replace": "could of", "prob": 0.35},
-    {"find": r"\bwould've\b", "replace": "would of", "prob": 0.35},
-    {"find": r"\bshould've\b", "replace": "should of", "prob": 0.35},
-    # a lot / alot
-    {"find": r"\ba lot\b", "replace": "alot", "prob": 0.35},
-    # than / then confusion
-    {"find": r"\bthan\b", "replace": "then", "prob": 0.15},
-    # affect / effect
-    {"find": r"\baffect\b", "replace": "effect", "prob": 0.2},
-    # lose / loose
-    {"find": r"\blose\b", "replace": "loose", "prob": 0.25},
-    # to / too
-    {"find": r"\btoo\b", "replace": "to", "prob": 0.15},
-    # were / where
-    {"find": r"\bwere\b", "replace": "where", "prob": 0.1},
-]
+CRITICAL RULES:
+- modified_text must be the SAME LENGTH structure as the input (same sentences, \
+same paragraph breaks). Do NOT add or remove sentences.
+- Misspelling positions are character offsets in the modified_text (after permanent \
+errors are applied).
+- Each misspelling's "correct" field must match the actual word at that position \
+in modified_text.
+- Do NOT misspell proper nouns, technical terms, or very short words (a, I, is, etc.)
+- Return ONLY the JSON, nothing else.\
+"""
 
-# Punctuation errors teens make
-# Research: run-on sentences, comma splices, missing commas after introductory phrases,
-# missing commas before conjunctions are top student essay errors (Grammarly study)
-PUNCTUATION_ERRORS: list[dict] = [
-    # No comma before "but", "and", "so" in compound sentences (top essay error)
-    {"find": r",\s*(but|and|so|or)\b", "replace_fn": lambda m: " " + m.group(1), "prob": 0.45},
-    # No apostrophe in contractions: don't -> dont, can't -> cant, won't -> wont
-    {"find": r"\bdon't\b", "replace": "dont", "prob": 0.40},
-    {"find": r"\bcan't\b", "replace": "cant", "prob": 0.40},
-    {"find": r"\bwon't\b", "replace": "wont", "prob": 0.40},
-    {"find": r"\bdidn't\b", "replace": "didnt", "prob": 0.40},
-    {"find": r"\bdoesn't\b", "replace": "doesnt", "prob": 0.35},
-    {"find": r"\bisn't\b", "replace": "isnt", "prob": 0.35},
-    {"find": r"\bwasn't\b", "replace": "wasnt", "prob": 0.35},
-    {"find": r"\baren't\b", "replace": "arent", "prob": 0.35},
-    {"find": r"\bweren't\b", "replace": "werent", "prob": 0.35},
-    {"find": r"\bI'm\b", "replace": "im", "prob": 0.45},
-    {"find": r"\bI'll\b", "replace": "ill", "prob": 0.35},
-    {"find": r"\bI've\b", "replace": "ive", "prob": 0.40},
-    {"find": r"\bI'd\b", "replace": "id", "prob": 0.35},
-    {"find": r"\bthere's\b", "replace": "theres", "prob": 0.30},
-    {"find": r"\bthat's\b", "replace": "thats", "prob": 0.30},
-    {"find": r"\blet's\b", "replace": "lets", "prob": 0.30},
-    {"find": r"\bwhat's\b", "replace": "whats", "prob": 0.30},
-    {"find": r"\bhere's\b", "replace": "heres", "prob": 0.30},
-    # Sentence boundary errors — mutually exclusive (run-on, no cap, or comma splice)
-    # Only one of these fires per occurrence since they all match ". [A-Z]"
-    {"find": r"\.\s+([A-Z])", "replace_fn": lambda m: " " + m.group(1).lower(), "prob": 0.10,
-     "group": "sentence_boundary"},  # run-on sentence
-    {"find": r"\.\s+([A-Z])", "replace_fn": lambda m: ". " + m.group(1).lower(), "prob": 0.10,
-     "group": "sentence_boundary"},  # no capitalization
-    {"find": r"\.\s+([A-Z])", "replace_fn": lambda m: ", " + m.group(1).lower(), "prob": 0.06,
-     "group": "sentence_boundary"},  # comma splice
-    # Missing period at end of sentence before newline
-    {"find": r"([a-z])\.\n", "replace_fn": lambda m: m.group(1) + "\n", "prob": 0.25},
-    # Lowercase "i" instead of "I" (research: extremely common in teen writing)
-    {"find": r"\bI\b", "replace": "i", "prob": 0.30},
-    # Missing comma after introductory phrase (top essay error)
-    {"find": r"^(However|Therefore|Furthermore|Meanwhile|Afterwards|Finally|Actually|Basically),\s",
-     "replace_fn": lambda m: m.group(1) + " ", "prob": 0.3},
-]
+THOUGHT_BOUNDARIES_SYSTEM_PROMPT = """\
+You analyze text to find "thought boundaries" — places where the writer shifts \
+to a new idea, changes topic, introduces a contrast, adds a new point, gives an \
+example, or transitions between concepts.
 
-# Textese that leaks into schoolwork (research: 64% of teens do this occasionally)
-TEXTESE_LEAKS: list[dict] = [
-    {"find": r"\bbecause\b", "replace": "bc", "prob": 0.08},
-    {"find": r"\bto be honest\b", "replace": "tbh", "prob": 0.10},
-    {"find": r"\bright now\b", "replace": "rn", "prob": 0.06},
-    {"find": r"\bI don't know\b", "replace": "idk", "prob": 0.08},
-    {"find": r"\bin my opinion\b", "replace": "imo", "prob": 0.10},
-    {"find": r"\bthrough\b", "replace": "thru", "prob": 0.05},
-    {"find": r"\bgoing to\b", "replace": "gonna", "prob": 0.10},
-    {"find": r"\bwant to\b", "replace": "wanna", "prob": 0.08},
-    {"find": r"\bprobably\b", "replace": "prolly", "prob": 0.06},
-]
+Given text, return a JSON array of character positions where thought boundaries occur. \
+These are positions where a real person typing would pause longer to gather their \
+thoughts before continuing.
+
+Return ONLY a JSON array of integers, nothing else. Example: [0, 145, 289, 512]\
+"""
 
 
 class HumanErrors:
-    """Applies realistic human errors to text before it gets typed."""
+    """AI-powered human error generator. Falls back to no-op if API unavailable."""
 
     def __init__(
         self,
@@ -244,76 +87,27 @@ class HumanErrors:
         punctuation_error_rate: float = 0.2,
         seed: int | None = None,
     ):
-        self._rng = random.Random(seed)
         self.misspelling_rate = misspelling_rate
         self.grammar_error_rate = grammar_error_rate
         self.punctuation_error_rate = punctuation_error_rate
 
-    def apply_misspellings(self, text: str) -> list[tuple[str, str, int]]:
-        """Find words to misspell. Returns list of (wrong, correct, position)."""
-        misspellings: list[tuple[str, str, int]] = []
-        for match in re.finditer(r"\b(\w+)\b", text):
-            word = match.group(1)
-            lower = word.lower()
-            if lower in COMMON_MISSPELLINGS and self._rng.random() < self.misspelling_rate:
-                wrong = self._rng.choice(COMMON_MISSPELLINGS[lower])
-                # Preserve original capitalization
-                if word[0].isupper():
-                    wrong = wrong[0].upper() + wrong[1:]
-                if word.isupper():
-                    wrong = wrong.upper()
-                misspellings.append((wrong, word, match.start()))
-        return misspellings
+        self._api_key = os.getenv("ANTHROPIC_API_KEY")
+        self._client: Optional[anthropic.Anthropic] = None
+        self._enabled = bool(self._api_key)
 
-    def apply_grammar_errors(self, text: str) -> str:
-        """Apply teen-style grammar errors to the text. These are NOT corrected."""
-        if self._rng.random() > self.grammar_error_rate:
-            return text
+        if self._api_key:
+            try:
+                self._client = anthropic.Anthropic(api_key=self._api_key)
+            except Exception:
+                logger.exception("Failed to initialize Anthropic client for HumanErrors")
+                self._enabled = False
 
-        for swap in GRAMMAR_SWAPS:
-            if self._rng.random() < swap["prob"]:
-                text = re.sub(swap["find"], swap["replace"], text, count=1)
-
-        return text
-
-    def apply_punctuation_errors(self, text: str) -> str:
-        """Apply teen-style punctuation errors. These are NOT corrected."""
-        if self._rng.random() > self.punctuation_error_rate:
-            return text
-
-        fired_groups: set[str] = set()
-        for rule in PUNCTUATION_ERRORS:
-            # Mutually exclusive groups — only one rule per group fires
-            group = rule.get("group")
-            if group and group in fired_groups:
-                continue
-            if self._rng.random() < rule["prob"]:
-                if "replace_fn" in rule:
-                    text = re.sub(rule["find"], rule["replace_fn"], text, count=1)
-                else:
-                    text = re.sub(rule["find"], rule["replace"], text, count=1)
-                if group:
-                    fired_groups.add(group)
-
-        return text
-
-    def apply_textese(self, text: str) -> str:
-        """Occasionally leak texting abbreviations into the text.
-
-        Research: 64% of teens admit to using textese in schoolwork occasionally.
-        We apply it sparingly so it looks natural — just a slip here and there.
-        """
-        if self._rng.random() > 0.3:  # only 30% of segments get textese treatment
-            return text
-
-        for rule in TEXTESE_LEAKS:
-            if self._rng.random() < rule["prob"]:
-                text = re.sub(rule["find"], rule["replace"], text, count=1, flags=re.IGNORECASE)
-
-        return text
+    @property
+    def is_enabled(self) -> bool:
+        return self._enabled and self._client is not None
 
     def process_text(self, text: str) -> tuple[str, list[tuple[str, str, int]]]:
-        """Apply all human errors to text.
+        """Apply all human errors to text using AI.
 
         Returns:
             (modified_text, misspellings_to_fix)
@@ -321,16 +115,144 @@ class HumanErrors:
             - misspellings_to_fix is a list of (wrong, correct, pos) that the
               typing engine should type wrong then fix
         """
-        # Grammar errors are permanent (teen doesn't notice)
-        text = self.apply_grammar_errors(text)
+        if not self.is_enabled or not text.strip():
+            return text, []
 
-        # Textese slips before punctuation (so punctuation rules can affect textese output)
-        text = self.apply_textese(text)
+        try:
+            return self._ai_process_text(text)
+        except Exception:
+            logger.exception("AI human errors failed, returning text unchanged")
+            return text, []
 
-        # Punctuation errors applied last (after textese modifies contractions etc.)
-        text = self.apply_punctuation_errors(text)
+    def _ai_process_text(self, text: str) -> tuple[str, list[tuple[str, str, int]]]:
+        """Call Claude to generate realistic human errors."""
+        word_count = len(text.split())
+        misspelling_count = max(1, int(word_count * self.misspelling_rate))
+        grammar_note = ""
+        if self.grammar_error_rate < 0.05:
+            grammar_note = "Very few grammar errors (this student is careful). "
+        elif self.grammar_error_rate > 0.25:
+            grammar_note = "More grammar errors than average (this student rushes). "
 
-        # Misspellings are temporary (typed wrong, then corrected)
-        misspellings = self.apply_misspellings(text)
+        punct_note = ""
+        if self.punctuation_error_rate < 0.05:
+            punct_note = "Very few punctuation errors. "
+        elif self.punctuation_error_rate > 0.30:
+            punct_note = "Frequent punctuation errors (lazy with commas/apostrophes). "
 
-        return text, misspellings
+        user_prompt = (
+            f"{grammar_note}{punct_note}"
+            f"Target about {misspelling_count} misspellings to fix.\n\n"
+            f"Text ({word_count} words):\n---\n{text}\n---"
+        )
+
+        response = self._client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            timeout=45.0,
+            max_tokens=max(2048, len(text) * 2),
+            system=HUMAN_ERRORS_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+
+        response_text = response.content[0].text.strip()
+
+        # Parse JSON
+        data = self._parse_json(response_text)
+        if not data:
+            return text, []
+
+        modified_text = data.get("modified_text", text)
+        raw_misspellings = data.get("misspellings", [])
+
+        # Convert misspellings to tuple format, validating positions
+        misspellings: list[tuple[str, str, int]] = []
+        for m in raw_misspellings:
+            wrong = m.get("wrong", "")
+            correct = m.get("correct", "")
+            pos = m.get("position", -1)
+            if wrong and correct and pos >= 0:
+                # Validate the position — the correct word should be at that position
+                if pos < len(modified_text):
+                    actual_word = modified_text[pos:pos + len(correct)]
+                    if actual_word.lower() == correct.lower():
+                        misspellings.append((wrong, correct, pos))
+                    else:
+                        # Try to find the word nearby (AI positions can be off)
+                        found_pos = self._find_word_near(modified_text, correct, pos)
+                        if found_pos >= 0:
+                            misspellings.append((wrong, correct, found_pos))
+
+        return modified_text, misspellings
+
+    def find_thought_boundaries(self, text: str) -> list[int]:
+        """Use AI to identify thought boundary positions in text.
+
+        Returns list of character positions where the writer shifts ideas.
+        """
+        if not self.is_enabled or len(text) < 50:
+            return []
+
+        try:
+            response = self._client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                timeout=30.0,
+                max_tokens=1024,
+                system=THOUGHT_BOUNDARIES_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": text}],
+            )
+
+            response_text = response.content[0].text.strip()
+            positions = json.loads(response_text)
+            if isinstance(positions, list):
+                return [p for p in positions if isinstance(p, int) and 0 <= p < len(text)]
+            return []
+        except Exception:
+            logger.exception("AI thought boundary detection failed")
+            return []
+
+    @staticmethod
+    def _find_word_near(text: str, word: str, approximate_pos: int, window: int = 30) -> int:
+        """Find a word near an approximate position."""
+        start = max(0, approximate_pos - window)
+        end = min(len(text), approximate_pos + window + len(word))
+        search_region = text[start:end]
+
+        # Case-insensitive word boundary search
+        pattern = r"\b" + re.escape(word) + r"\b"
+        match = re.search(pattern, search_region, re.IGNORECASE)
+        if match:
+            return start + match.start()
+        return -1
+
+    @staticmethod
+    def _parse_json(text: str) -> Optional[dict]:
+        """Extract and parse JSON from response."""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Try markdown code fence
+        json_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # Try to find JSON object
+        brace_start = text.find("{")
+        if brace_start >= 0:
+            depth = 0
+            for i in range(brace_start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(text[brace_start:i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+        return None
