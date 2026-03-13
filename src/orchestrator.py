@@ -336,12 +336,54 @@ class Orchestrator:
             logger.exception("Failed to start table fill thread")
             self.state = OrchestratorState.IDLE
 
-    def _table_fill_pipeline(self, items: list[ClipboardContent], skip_columns: int = 1) -> None:
-        """Type each queued item with TAB between them, handling row breaks.
+    _CLIPBOARD_SENTINEL = "\x00__GHOST_TYPER_EMPTY__"
 
-        To skip a cell (e.g. one that's already filled), copy "-" or "SKIP"
-        as the item for that position.  The tool will just TAB past it.
+    def _cell_has_content(self, simulator: KeystrokeSimulator) -> bool:
+        """Check if the current cell has content by copying and reading clipboard.
+
+        Tab in Google Docs selects cell content automatically.
+        We set a sentinel on the clipboard, then Cmd+C. If clipboard
+        changes from the sentinel, the cell had content.
         """
+        import AppKit
+        pb = AppKit.NSPasteboard.generalPasteboard()
+
+        # Pause clipboard monitor so it doesn't interfere
+        old_enabled = self.clipboard_monitor.enabled
+        self.clipboard_monitor.enabled = False
+
+        # Set sentinel
+        pb.clearContents()
+        pb.setString_forType_(self._CLIPBOARD_SENTINEL, AppKit.NSPasteboardTypeString)
+        time.sleep(0.05)
+
+        # Select all text in the cell: Home then Shift+End
+        simulator.press_key("home")
+        time.sleep(0.1)
+        simulator.hotkey("shift", "end")
+        time.sleep(0.15)
+
+        # Copy whatever is selected
+        simulator.hotkey("command", "c")
+        time.sleep(0.35)
+
+        # Read back
+        text = pb.stringForType_(AppKit.NSPasteboardTypeString) or ""
+        has_content = text != self._CLIPBOARD_SENTINEL and len(text.strip()) > 0
+
+        logger.info("Cell check: clipboard=%r, sentinel=%r, has_content=%s",
+                     text[:50] if text else "", self._CLIPBOARD_SENTINEL[:20], has_content)
+
+        # Restore clipboard monitor
+        self.clipboard_monitor.enabled = old_enabled
+
+        return has_content
+
+        content = self._read_clipboard().strip()
+        return len(content) > 0
+
+    def _table_fill_pipeline(self, items: list[ClipboardContent], skip_columns: int = 1) -> None:
+        """Type each queued item with TAB between them, auto-skipping filled cells."""
         try:
             # ── Separate items into cells and row breaks ──
             cell_items: list[ClipboardContent | None] = []  # None = row break
@@ -351,86 +393,74 @@ class Orchestrator:
                 else:
                     cell_items.append(item)
 
-            # ── Parse all cell items into segments and build combined plan ──
             total_word_count = 0
             cell_count = 0
+            skipped_count = 0
 
             self._typing_start_time = time.time()
+            self.notification_service.notify_start(0)
 
-            combined_plan = TypingPlan()
-            is_first_cell = True
-
-            # Strings that mean "skip this cell" — just TAB past it
-            skip_markers = {"-", "SKIP", "skip", "—"}
-
-            for entry in cell_items:
-                if self._cancel_event.is_set():
-                    return
-
-                if entry is None:
-                    # Row break: TAB to wrap to next row, then skip pre-filled columns
-                    combined_plan.actions.append(PressKey(key="tab"))
-                    for _ in range(skip_columns):
-                        combined_plan.actions.append(
-                            Pause(duration=0.15, description="Skipping pre-filled column")
-                        )
-                        combined_plan.actions.append(PressKey(key="tab"))
-                    combined_plan.actions.append(
-                        Pause(duration=0.4, description="Moving to next row")
-                    )
-                    is_first_cell = True
-                    continue
-
-                # TAB to next cell (except before the very first cell)
-                if not is_first_cell:
-                    combined_plan.actions.append(PressKey(key="tab"))
-                    combined_plan.actions.append(
-                        Pause(duration=0.3, description="Moving to next cell")
-                    )
-                is_first_cell = False
-
-                # Check for skip marker — just TAB past this cell
-                if entry.text.strip() in skip_markers:
-                    logger.info("Skip marker found, will TAB past cell")
-                    continue
-
-                # Parse and plan this cell's typing
-                # Use simple mode: no proofreading or rewrites (arrow keys
-                # escape table cells in Google Docs).
-                segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
-                if segments and segments[0].text.strip():
-                    entry_plan = self.fallback_planner.plan(segments, simple=True)
-                    combined_plan.actions.extend(entry_plan.actions)
-                    total_word_count += sum(
-                        len(seg.text.split()) for seg in segments if seg.text.strip()
-                    )
-                cell_count += 1
-
-            self._current_word_count = total_word_count
-            self.notification_service.notify_start(self._current_word_count)
-
-            if self._cancel_event.is_set():
-                return
-
-            # ── Execute ──
+            # ── Execute live: Tab through cells, type items into empty ones ──
             self.state = OrchestratorState.TYPING
             simulator = KeystrokeSimulator()
             self._simulator = simulator
             engine = TypingEngine(self._settings, profile=self._profile)
 
-            self._total_chars = self._count_typed_chars(combined_plan.actions)
-            self._chars_typed = 0
-            self._execute_plan(combined_plan, engine, simulator)
+            # Build a queue of items to type (skip row breaks for now)
+            type_queue = [e for e in cell_items if e is not None]
+            queue_index = 0
+            is_first_cell = True
+            max_cells = len(type_queue) + 20  # safety limit to avoid infinite loop
+
+            cells_visited = 0
+            while queue_index < len(type_queue) and cells_visited < max_cells:
+                if self._cancel_event.is_set() or not simulator.is_active:
+                    return
+
+                cells_visited += 1
+
+                # TAB to next cell (except the very first)
+                if not is_first_cell:
+                    simulator.press_key("tab")
+                    time.sleep(0.5)
+                is_first_cell = False
+
+                # Check if this cell already has content
+                if self._cell_has_content(simulator):
+                    logger.info("Cell already has content — skipping cell (keeping item %d)", queue_index)
+                    skipped_count += 1
+                    simulator.press_key("right")
+                    simulator.wait(0.1)
+                    # DON'T advance queue_index — save this item for the next empty cell
+                    continue
+
+                # Cell is empty — type the next queued item into it
+                entry = type_queue[queue_index]
+                queue_index += 1
+
+                segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
+                if segments and segments[0].text.strip():
+                    cell_plan = self.fallback_planner.plan(segments, simple=True)
+
+                    self._total_chars = self._count_typed_chars(cell_plan.actions)
+                    self._chars_typed = 0
+                    self._execute_plan(cell_plan, engine, simulator)
+
+                    total_word_count += sum(
+                        len(seg.text.split()) for seg in segments if seg.text.strip()
+                    )
+                cell_count += 1
 
             if self._cancel_event.is_set():
                 logger.info("Table fill cancelled")
                 return
 
+            self._current_word_count = total_word_count
             elapsed = time.time() - self._typing_start_time
             self.notification_service.notify_complete(self._current_word_count, elapsed)
             logger.info(
-                "Table fill complete: %d cells, %d words in %.1f seconds",
-                cell_count, self._current_word_count, elapsed,
+                "Table fill complete: %d cells typed, %d skipped, %d words in %.1f seconds",
+                cell_count, skipped_count, self._current_word_count, elapsed,
             )
 
         except Exception as e:
