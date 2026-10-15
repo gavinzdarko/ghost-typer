@@ -66,14 +66,16 @@ class TextParser:
         paragraphs = re.split(r"\n\s*\n", text)
 
         for i, para in enumerate(paragraphs):
-            para = para.strip()
-            if not para:
+            # Keep leading indentation: plain-text clipboard content may be
+            # code or another indentation-sensitive format.
+            para = para.rstrip()
+            if not para.strip():
                 continue
 
             lines = para.split("\n")
             for j, line in enumerate(lines):
-                line = line.strip()
-                if not line:
+                line = line.rstrip()
+                if not line.strip():
                     continue
                 segments.append(TextSegment(text=line, formatting={}))
                 if j < len(lines) - 1:
