@@ -171,6 +171,8 @@ class TypingPlanner:
         self._draft_cache.clear()
         self._draft_requests = 0
 
+        self._human_errors.reset_budget()
+
         # Detect thought boundaries via AI
         if not simple:
             full_text = "".join(seg.text for seg in segments)
