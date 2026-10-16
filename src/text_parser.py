@@ -45,21 +45,9 @@ class TextParser:
 
         return self._parse_plain_text(content)
 
-    # Regex to strip citation/footnote markers like [1], [2][3], [a], [note 1], [edit], [who?], etc.
-    _CITATION_RE = re.compile(
-        r"\s*\[(?:\d+(?:[,\s]*\d+)*|[a-z]|note \d+|citation needed|"
-        r"edit|who\?|when\?|where\?|why\?|how\?|which\?|"
-        r"failed verification|better source needed|"
-        r"p\.\s*\d+(?:\u2013\d+)?)\]",
-        re.IGNORECASE,
-    )
-
     def _parse_plain_text(self, text: str) -> list[TextSegment]:
         """Parse plain text preserving paragraph structure."""
         text = text.replace("\r\n", "\n").replace("\r", "\n")
-        # Strip citation markers like [1][2][3]
-        text = self._CITATION_RE.sub("", text)
-
         segments: list[TextSegment] = []
         for part in re.split(r"(\n+)", text):
             if not part:
