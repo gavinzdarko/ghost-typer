@@ -1272,7 +1272,7 @@ def test_orchestrator_execute_distraction_pause():
 
 
 def test_orchestrator_speed_multiplier():
-    """Orchestrator._execute_type_text scales delay by speed_multiplier."""
+    """Half speed takes twice as long for the same seeded keystroke."""
     from src.orchestrator import Orchestrator
     orch = Orchestrator()
     orch._chars_typed = 0
@@ -1294,7 +1294,7 @@ def test_orchestrator_speed_multiplier():
     orch._chars_typed = 0
     engine.reset()
     engine.seed(42)
-    action_slow = TypeText(text="a", speed_multiplier=2.0)
+    action_slow = TypeText(text="a", speed_multiplier=0.5)
     orch._execute_type_text(action_slow, engine, sim_slow, "")
     slow_waits = [c[0][0] for c in sim_slow.wait.call_args_list]
     assert len(normal_waits) >= 1 and len(slow_waits) >= 1

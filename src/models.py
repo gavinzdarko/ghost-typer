@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
@@ -509,9 +510,11 @@ class TypeText(TypingAction):
     """Type a string of text character by character with realistic timing."""
 
     text: str = ""
-    speed_multiplier: float = 1.0  # AI can adjust per-segment (e.g. quotes slower)
+    speed_multiplier: float = 1.0  # <1 is slower; >1 is faster
 
     def __post_init__(self):
+        if not math.isfinite(self.speed_multiplier) or self.speed_multiplier <= 0:
+            raise ValueError("speed_multiplier must be finite and positive")
         if not self.description:
             preview = self.text[:40] + ("..." if len(self.text) > 40 else "")
             self.description = f"Type: {preview!r}"
