@@ -227,9 +227,37 @@ class HumanErrors:
                 if result != source:
                     return False
                 continue
-            if (not result.strip() or len(result) > len(source) * 1.25
-                    or SequenceMatcher(None, source, result, autojunk=False).ratio() < .8):
+            if not result.strip() or len(result) > len(source) * 1.25:
                 return False
+            # Trim shared edges before matching: one typo in repetitive text
+            # must not make an 8000-character line a quadratic comparison.
+            prefix = 0
+            limit = min(len(source), len(result))
+            while prefix < limit and source[prefix] == result[prefix]:
+                prefix += 1
+            suffix = 0
+            while (suffix < limit - prefix
+                   and source[len(source) - suffix - 1] == result[len(result) - suffix - 1]):
+                suffix += 1
+            source_end = len(source) - suffix
+            result_end = len(result) - suffix
+            changed_source, changed_result = source[prefix:source_end], result[prefix:result_end]
+            matcher = SequenceMatcher(None, changed_source, changed_result, autojunk=True)
+            matched = prefix + suffix + sum(block.size for block in matcher.get_matching_blocks())
+            if 2 * matched / (len(source) + len(result)) < .8:
+                return False
+            for tag, start, end, result_start, result_end in matcher.get_opcodes():
+                if tag == "equal":
+                    continue
+                removed = changed_source[start:end]
+                inserted = changed_result[result_start:result_end]
+                # Grammar and punctuation mistakes are small local edits. A
+                # similar surrounding paragraph cannot justify losing a sentence
+                # or substituting a large section of clipboard text.
+                if max(len(removed), len(inserted)) > 24:
+                    return False
+                if re.search(r"\w[^.!?]*[.!?](?:\s|$)", removed):
+                    return False
             # Preserve paragraph indentation and separators exactly.
             for pattern in (r"^\s*", r"\s*$"):
                 if re.search(pattern, source).group() != re.search(pattern, result).group():
