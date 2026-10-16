@@ -429,8 +429,10 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
                 continue
             lo, hi = value.get("min", current.min), value.get("max", current.max)
             integer = isinstance(current, IntRange)
+            floor = .05 if "multiplier" in key else 0
+            ceiling = 10 if "multiplier" in key else min(900, max(1, current.max * 3))
             if (_profile_number(lo, integer=integer) and _profile_number(hi, integer=integer)
-                    and 0 <= lo <= hi <= 3600):
+                    and floor <= lo <= hi <= ceiling):
                 setattr(obj, key, type(current)(lo, hi))
         elif is_dataclass(current):
             if isinstance(value, dict):
@@ -445,9 +447,21 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
             # parameters are capped to keep an accidental AI value bounded.
             probability = (any(part in key for part in ("probability", "rate", "level", "familiarity", "density", "split"))
                            or key in {"confidence_level", "energy_level", "difficulty_threshold"})
-            upper = 1 if probability else 3600
-            strictly_positive = ("multiplier" in key or key in {"progress_report_frequency", "revisit_length_boost_divisor", "chars_per_screen"})
-            if 0 <= value <= upper and (not strictly_positive or value > 0):
+            lower, upper = 0, (1 if probability else min(3600, max(1, abs(current) * 10)))
+            if "multiplier" in key:
+                lower, upper = .05, 10
+            elif "sigma" in key:
+                upper = 2
+            elif key.endswith("lognormal_mu"):
+                lower, upper = -5, 5
+            elif key == "delay_clamp_min":
+                upper = .5
+            elif key == "delay_clamp_max":
+                lower, upper = .05, 5
+            elif key == "warmup_slowdown":
+                upper = 2
+            strictly_positive = key in {"progress_report_frequency", "revisit_length_boost_divisor", "chars_per_screen"}
+            if lower <= value <= upper and (not strictly_positive or value > 0):
                 setattr(obj, key, value)
         elif isinstance(current, str):
             if isinstance(value, str):
@@ -484,8 +498,12 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
 
 
 def _profile_number(value: Any, *, integer: bool = False) -> bool:
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(value) and (not integer or isinstance(value, int)))
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value) and (not integer or isinstance(value, int))
+    except OverflowError:
+        return False
 
 
 # Avoid shadowing built-in max/min inside Range.clamp

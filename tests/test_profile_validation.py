@@ -28,3 +28,26 @@ def test_valid_profile_customization_survives_and_ranges_are_finite():
     assert p.keystroke.delay_clamp_min == TypingProfile.defaults().keystroke.delay_clamp_min
     assert p.peek == TypingProfile.defaults().peek
     assert p.energy_level == .7
+
+
+def test_extreme_ai_profile_cannot_overflow_or_create_hour_long_keystrokes():
+    import math
+    from src.models import Settings
+    from src.typing_engine import TypingEngine
+    p = TypingProfile.from_dict({
+        'keystroke': {'bimodal_fast_sigma': 3600, 'bimodal_slow_sigma': 3600,
+                      'bimodal_slow_multiplier': 3600, 'delay_clamp_max': 3600,
+                      'shift_multiplier': {'min': 0, 'max': 3600},
+                      'warmup_slowdown': 10 ** 1000},
+        'correction': {'first_backspace_delay': {'min': 0, 'max': 3600}},
+    })
+    assert p == TypingProfile.defaults()
+    engine = TypingEngine(Settings(wpm_variance=0), p)
+    engine.seed(0)
+    for char in ('The human types carefully! ' * 50):
+        delay = engine.delay_for_keystroke(char)
+        assert math.isfinite(delay) and .035 <= delay <= 2
+        engine.on_char_typed(char)
+    planner = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0,
+                                    punctuation_error_rate=0), profile=p, ai_enabled=False)
+    assert planner.plan_plain_text('The extreme profile falls back safely.').actions
