@@ -269,13 +269,12 @@ class TypingPlanner:
         # --- Apply human errors (grammar, punctuation, spelling that stay in) ---
         if self.settings.grammar_error_rate > 0 or self.settings.punctuation_error_rate > 0:
             modified_text, misspellings = self._human_errors.process_text(segment.text)
-            # Build lookup for misspellings: word -> (wrong, correct)
-            misspell_by_word = {}
-            for wrong, correct, _pos in misspellings:
-                misspell_by_word[correct.lower()] = (wrong, correct)
+            # Preserve the validated occurrence, rather than redirecting a typo
+            # to the first case-insensitive match elsewhere in the paragraph.
+            misspell_by_position = {pos: (wrong, correct) for wrong, correct, pos in misspellings}
         else:
             modified_text = segment.text
-            misspell_by_word = {}
+            misspell_by_position = {}
 
         # --- Break text into typeable chunks ---
         chunks = self._break_into_chunks(modified_text, text_offset=self._char_position)
@@ -287,7 +286,12 @@ class TypingPlanner:
                               max_typo_distance=self.profile.proofread.max_proofread_distance)
         applied_actions = 0
 
+        segment_offset = 0
         for chunk in chunks:
+            chunk_misspellings = {pos - segment_offset: pair
+                                  for pos, pair in misspell_by_position.items()
+                                  if segment_offset <= pos < segment_offset + len(chunk.text)}
+            segment_offset += len(chunk.text)
             # Track sentences and inject periodic thought pauses
             if chunk.is_thought_boundary:
                 sentences_since_thought_pause = 0
@@ -328,7 +332,7 @@ class TypingPlanner:
             if not restructured:
                 self._chunk_prefix = emitted.text
                 chunk_actions, chunk_chars, chunk_typos = self._plan_chunk(
-                    chunk, misspell_by_word=misspell_by_word, total_paste_chars=total_paste_chars
+                    chunk, misspell_by_position=chunk_misspellings, total_paste_chars=total_paste_chars
                 )
                 actions.extend(chunk_actions)
                 char_count += chunk_chars
@@ -559,7 +563,7 @@ class TypingPlanner:
     # ------------------------------------------------------------------
 
     def _plan_chunk(
-        self, chunk: _Chunk, misspell_by_word: dict[str, tuple[str, str]] | None = None,
+        self, chunk: _Chunk, misspell_by_position: dict[int, tuple[str, str]] | None = None,
         total_paste_chars: int = 500,
     ) -> tuple[list[TypingAction], int, list[tuple[str, str, int]]]:
         """Plan actions for a single chunk of text.
@@ -570,7 +574,7 @@ class TypingPlanner:
         actions: list[TypingAction] = []
         text = chunk.text
         char_count = 0
-        misspell_by_word = misspell_by_word or {}
+        misspell_by_position = misspell_by_position or {}
         # Track uncorrected typos: (wrong_char, correct_char, position_in_typed_output)
         uncorrected_typos: list[tuple[str, str, int]] = []
 
@@ -587,16 +591,15 @@ class TypingPlanner:
             actions.append(Pause(duration=self.engine.paragraph_pause_duration()))
             return actions, char_count, []
 
-        # --- Find word positions for misspelling corrections ---
-        # Match by word content (not position) so it works across chunk boundaries.
-        # pop() each match so the same word is only misspelled once.
-        word_misspells: dict[int, tuple[str, str, int]] = {}  # chunk-local pos -> (wrong, correct, length)
+        # Apply only the exact source occurrence and restore its original case.
+        word_misspells: dict[int, tuple[str, str, int]] = {}
         for match in re.finditer(r"\b(\w+)\b", text):
-            word = match.group(1)
-            lower = word.lower()
-            if lower in misspell_by_word:
-                wrong, correct = misspell_by_word.pop(lower)
-                word_misspells[match.start()] = (wrong, correct, len(word))
+            pair = misspell_by_position.get(match.start())
+            if pair:
+                wrong, correct = pair
+                word = match.group(1)
+                if word.lower() == correct.lower():
+                    word_misspells[match.start()] = (wrong, word, len(word))
 
         # --- Pre-scan for single-char mistake positions (adjacent key misclicks) ---
         mistake_positions = self._pick_mistake_positions(text)
