@@ -148,8 +148,10 @@ class KeystrokeSimulator:
 
     def _do_press_release(self, key) -> None:
         """Press and release a key (called under _cg_lock)."""
-        self._controller.press(key)
-        self._controller.release(key)
+        try:
+            self._controller.press(key)
+        finally:
+            self._controller.release(key)
 
     def type_backspace(self, count: int = 1) -> None:
         """Press backspace `count` times with a small inter-press delay."""
@@ -175,13 +177,25 @@ class KeystrokeSimulator:
         # Execute entire hotkey sequence under the lock to prevent
         # stop() from leaving modifiers stuck
         def _do_hotkey():
-            for mod in modifiers:
-                self._controller.press(mod)
-            time.sleep(0.02)
-            self._controller.press(main_key)
-            self._controller.release(main_key)
-            for mod in reversed(modifiers):
-                self._controller.release(mod)
+            pressed = []
+            try:
+                for mod in modifiers:
+                    # A backend may raise after posting the key-down event.
+                    pressed.append(mod)
+                    self._controller.press(mod)
+                time.sleep(0.02)
+                pressed.append(main_key)
+                self._controller.press(main_key)
+            finally:
+                release_error = None
+                for key in reversed(pressed):
+                    try:
+                        self._controller.release(key)
+                    except Exception as exc:
+                        # One failed release must not skip the other modifiers.
+                        release_error = exc
+                if release_error is not None:
+                    raise release_error
 
         self._safe_cg_call(_do_hotkey)
         time.sleep(0.05)
