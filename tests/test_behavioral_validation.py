@@ -78,3 +78,24 @@ def test_inline_annotation_phrases_and_unicode_remain_valid():
             'word_abandonments': [{'word': 'approximately', 'replacement': 'à peu près',
                                    'abandon_after_chars': 4}]}
     assert validate_behavioral_content(data, 'approximately their paper') == data
+
+
+@pytest.mark.parametrize('draft', ['cafe\u0301 draft', 'family 👪 draft'])
+def test_temporary_sentence_drafts_require_predictable_deletion_units(draft):
+    text = 'The café is open.'
+    data = {'sentence_restructures': [{'original_sentence': text, 'first_draft': draft}]}
+    assert validate_behavioral_content(data, text) == {}
+    p = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0, punctuation_error_rate=0,
+                               false_alarm_rate=0, rewrite_base_probability=0,
+                               rewrite_max_probability=0), ai_enabled=False)
+    assert PlannedText().apply(p.plan([TextSegment(text)], behavioral_content=data).actions).text == text
+
+
+def test_abandonment_does_not_delete_unicode_source_or_case_equivalents():
+    p = TypingPlanner(ai_enabled=False)
+    data = {'word_abandonments': [{'word': 'café', 'replacement': 'shop',
+                                  'abandon_after_chars': 3}]}
+    assert validate_behavioral_content(data, 'café') == {}
+    p._behavioral_content = {'word_abandonments': [
+        {'word': 'Kelvin', 'replacement': 'temperature', 'abandon_after_chars': 3}]}
+    assert p._check_word_abandonment('Kelvin', 0) is None
