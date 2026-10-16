@@ -89,6 +89,75 @@ class _Chunk:
 # No hardcoded word lists.
 
 
+def validate_behavioral_content(data: object, text: str) -> dict:
+    """Sanitize optional AI annotations before any planner branch consumes them."""
+    if not isinstance(data, dict):
+        return {}
+    result = {}
+    for key in ("word_abandonments", "sentence_restructures", "distraction_points",
+                "quote_ranges", "autocorrect_fixes", "proofreading_fixes",
+                "word_speed_map", "word_difficulty_ratings", "syllable_boundaries",
+                "composition_annotations"):
+        entries = data.get(key, [])
+        if not isinstance(entries, list):
+            continue
+        valid = []
+        for entry in entries[:100]:
+            if not isinstance(entry, dict):
+                continue
+            def string(name, limit=500):
+                value = entry.get(name)
+                # These are inline words/phrases and temporary drafts. Control
+                # characters can navigate the destination (Tab/Return) and make
+                # the subsequent deletion or cursor moves target another field.
+                return (isinstance(value, str) and 0 < len(value) <= limit
+                        and value.isprintable())
+            def number(name, low, high, integer=False):
+                value = entry.get(name)
+                return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                        and low <= value <= high and math.isfinite(value)
+                        and (not integer or isinstance(value, int)))
+            if key == "word_speed_map":
+                okay = string("word", 100) and number("multiplier", .1, 10)
+            elif key == "word_difficulty_ratings":
+                okay = string("word", 100) and number("difficulty", 0, 1)
+            elif key == "syllable_boundaries":
+                syllables = entry.get("syllables")
+                okay = (string("word", 100) and isinstance(syllables, list)
+                        and 1 < len(syllables) <= 30
+                        and all(isinstance(s, str) and s for s in syllables)
+                        and "".join(syllables).lower() == entry["word"].lower())
+            elif key in ("quote_ranges", "composition_annotations"):
+                okay = (number("start", 0, len(text), True)
+                        and number("end", 0, len(text), True)
+                        and entry["start"] < entry["end"])
+                if key == "quote_ranges":
+                    okay = okay and entry.get("type", "direct_quote") in ("direct_quote", "block_quote", "paraphrase_close")
+                else:
+                    okay = okay and entry.get("mode") in ("copy", "composition")
+            elif key == "word_abandonments":
+                okay = (string("word", 100) and string("replacement", 100)
+                        and entry["word"].isascii()
+                        and number("abandon_after_chars", 1, len(entry["word"]) - 1, True))
+            elif key == "sentence_restructures":
+                okay = (string("original_sentence", 2000) and string("first_draft", 4000)
+                        and entry["first_draft"].isascii()
+                        and entry["original_sentence"] in text
+                        and len(entry["first_draft"]) <= max(100, 2 * len(entry["original_sentence"])))
+            elif key == "distraction_points":
+                okay = (number("position", 0, len(text), True)
+                        and entry.get("quality", "low") in ("high", "medium", "low"))
+            elif key == "autocorrect_fixes":
+                okay = string("word", 100) and string("correct", 100)
+            else:
+                okay = string("original") and string("fixed")
+            if okay:
+                valid.append(entry)
+        if valid:
+            result[key] = valid
+    return result
+
+
 class TypingPlanner:
     """Converts TextSegments into a TypingPlan with realistic mistakes and pauses."""
 
@@ -164,7 +233,8 @@ class TypingPlanner:
         total_paste_chars = sum(len(seg.text) for seg in segments)
 
         # Store behavioral content for use by sub-methods
-        self._behavioral_content = behavioral_content or {}
+        self._behavioral_content = validate_behavioral_content(
+            behavioral_content, "".join(seg.text for seg in segments))
 
         # Request drafts only for spans that are actually selected. A hard
         # session budget also covers repeated, cascading, and failed requests.
@@ -1027,6 +1097,10 @@ class TypingPlanner:
 
     def _get_ai_draft(self, final_text: str, context: str = "") -> str | None:
         """Lazily request a unique draft within this plan's hard call budget."""
+        # Repeat rewrites delete the restored source too. Code-point counts
+        # cannot safely predict native deletion units for Unicode graphemes.
+        if not final_text.isascii() or not final_text.isprintable():
+            return None
         if final_text in self._draft_cache:
             return self._draft_cache[final_text]
         if (not self._ai_rewriter or not self._ai_rewriter.is_enabled
@@ -1037,7 +1111,8 @@ class TypingPlanner:
         # the budget on the same span. AIRewriter handles API failures locally.
         self._draft_cache[final_text] = None
         draft = self._ai_rewriter.generate_first_draft(final_text, context)
-        if isinstance(draft, str) and draft and draft != final_text:
+        if (isinstance(draft, str) and draft and draft != final_text
+                and draft.isascii() and draft.isprintable()):
             self._draft_cache[final_text] = draft
         return self._draft_cache[final_text]
 
@@ -1567,6 +1642,8 @@ class TypingPlanner:
         if not match:
             return None
         current_word = match.group(0)
+        if not current_word.isascii():
+            return None
 
         for entry in abandonments:
             if entry.get("word", "").lower() == current_word.lower():

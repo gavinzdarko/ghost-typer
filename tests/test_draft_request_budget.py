@@ -1,4 +1,5 @@
 from unittest.mock import Mock
+import pytest
 
 from src.models import Settings
 from src.planned_text import PlannedText
@@ -65,3 +66,28 @@ def test_rejected_revisit_proposals_are_bounded_and_non_ascii_spends_nothing():
     for _ in range(40):
         assert p._maybe_build_revisit('café paragraph ' * 30, 3000) == []
     p._ai_rewriter.pick_revisit_targets.assert_not_called()
+
+
+@pytest.mark.parametrize('draft', ['draft\tother field', 'draft\nnew paragraph',
+                                  'draft\x08control', 'cafe\u0301 draft', '👪 draft'])
+def test_unsafe_temporary_draft_is_cached_as_failure_and_original_is_preserved(draft):
+    p = planner()
+    p._ai_rewriter.generate_first_draft.side_effect = None
+    p._ai_rewriter.generate_first_draft.return_value = draft
+    p.engine.rewrite_word_count = lambda: 1
+    text = 'An ordinary source phrase.'
+    p._pick_rewrite_positions = lambda *_: [(3, 'word')]
+    plan = p.plan_plain_text(text)
+    assert PlannedText().apply(plan.actions).text == text
+    assert p._get_ai_draft('ordinary') is None
+    assert p._ai_rewriter.generate_first_draft.call_count == 1
+
+
+def test_unicode_source_bypasses_temporary_and_repeated_rewrites():
+    p = planner()
+    p.engine.should_repeat_rewrite = lambda: True
+    p._pick_rewrite_positions = lambda *_: [(0, 'sentence')]
+    text = 'A cafe\u0301 for the family 👪.'
+    plan = p.plan_plain_text(text)
+    assert PlannedText().apply(plan.actions).text == text
+    p._ai_rewriter.generate_first_draft.assert_not_called()

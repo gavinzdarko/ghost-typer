@@ -32,7 +32,7 @@ from .models import (
     TypingPlan,
     TypingProfile,
 )
-from .typing_planner import FORMAT_SHORTCUTS, FORMAT_TYPE_MAP, TypingPlanner
+from .typing_planner import FORMAT_SHORTCUTS, FORMAT_TYPE_MAP, TypingPlanner, validate_behavioral_content
 
 logger = logging.getLogger(__name__)
 
@@ -1072,7 +1072,7 @@ class AIProfileGenerator:
             data = json.loads(response_text)
             if isinstance(data, dict):
                 logger.info("Generated AI behavioral content: %d keys", len(data))
-                return data
+                return validate_behavioral_content(data, text)
 
         except json.JSONDecodeError:
             logger.warning("AI behavioral content was not valid JSON")
