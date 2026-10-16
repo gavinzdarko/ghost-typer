@@ -54,7 +54,7 @@ class ClipboardMonitor:
 
     def __init__(
         self,
-        on_clipboard_change: Callable[[ClipboardContent], None],
+        on_clipboard_change: Callable[[ClipboardContent], bool | None],
         start_delay: float = 3.0,
     ):
         self._on_change = on_clipboard_change
@@ -189,10 +189,18 @@ class ClipboardMonitor:
             self._staged_content = None
         if content:
             logger.info("Cmd+V triggered — starting typing for: %s", content)
+            accepted = False
             try:
-                self._on_change(content)
+                # A busy orchestrator explicitly rejects the launch. Keep that
+                # content available for a later paste instead of consuming it.
+                accepted = self._on_change(content) is not False
             except Exception:
                 logger.exception("Error in clipboard change callback")
+            finally:
+                if not accepted:
+                    with self._staged_lock:
+                        if self._staged_content is None:
+                            self._staged_content = content
         else:
             logger.debug("Cmd+V pressed but no staged content")
 
