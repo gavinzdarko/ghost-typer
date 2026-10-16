@@ -5,6 +5,7 @@ macOS native notifications and optional webhook push notifications.
 from __future__ import annotations
 
 import logging
+import queue
 import subprocess
 import threading
 import time
@@ -23,6 +24,31 @@ class NotificationService:
     def __init__(self, webhook_url: Optional[str] = None, sound_enabled: bool = True):
         self.webhook_url = webhook_url
         self.sound_enabled = sound_enabled
+        self._pending = queue.Queue(maxsize=32)
+        self._worker_lock = threading.Lock()
+        self._worker = None
+
+    def _enqueue(self, operation) -> None:
+        """Bound notification work and keep subprocess/network waits off UI threads."""
+        try:
+            self._pending.put_nowait(operation)
+        except queue.Full:
+            logger.warning("Notification queue full; dropping notification")
+            return
+        with self._worker_lock:
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(target=self._drain, daemon=True, name="Notifications")
+                self._worker.start()
+
+    def _drain(self) -> None:
+        while True:
+            operation = self._pending.get()
+            try:
+                operation()
+            except Exception:
+                logger.exception("Notification delivery failed")
+            finally:
+                self._pending.task_done()
 
     def update_settings(self, webhook_url: Optional[str] = None, sound_enabled: bool = True) -> None:
         """Update notification settings."""
@@ -74,9 +100,13 @@ class NotificationService:
         self._send_native(title=f"{APP_NAME}", message="Typing resumed")
 
     def _send_native(self, title: str, message: str) -> None:
-        """Send a macOS native notification via osascript."""
+        """Queue a macOS notification without blocking typing or hotkey handling."""
+        sound_enabled = self.sound_enabled
+        self._enqueue(lambda: self._deliver_native(title, message, sound_enabled))
+
+    def _deliver_native(self, title: str, message: str, sound_enabled: bool) -> None:
         try:
-            sound_part = ' sound name "Funk"' if self.sound_enabled else ""
+            sound_part = ' sound name "Funk"' if sound_enabled else ""
             script = (
                 f'display notification "{self._escape_applescript(message)}" '
                 f'with title "{self._escape_applescript(title)}"'
@@ -97,11 +127,10 @@ class NotificationService:
         if not self.webhook_url:
             return
 
+        url = self.webhook_url
+
         def _do_send() -> None:
             try:
-                url = self.webhook_url
-                if not url:
-                    return
 
                 # Auto-detect service type from URL
                 if "ntfy" in url or url.startswith("https://ntfy."):
@@ -126,12 +155,13 @@ class NotificationService:
                         json={"title": title, "message": message, "app": APP_NAME},
                         timeout=10,
                     )
-                logger.info("Webhook notification sent to %s", url)
-            except Exception:
-                logger.exception("Failed to send webhook notification")
+                logger.info("Webhook notification sent")
+            except Exception as exc:
+                # Request exceptions can embed the full destination URL,
+                # including webhook tokens, credentials, and query secrets.
+                logger.warning("Failed to send webhook notification (%s)", type(exc).__name__)
 
-        thread = threading.Thread(target=_do_send, daemon=True)
-        thread.start()
+        self._enqueue(_do_send)
 
     @staticmethod
     def _escape_applescript(text: str) -> str:
