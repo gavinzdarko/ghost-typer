@@ -524,14 +524,14 @@ class Orchestrator:
 
         logger.info("Settings updated")
 
-    def _on_clipboard_change(self, content: ClipboardContent) -> None:
+    def _on_clipboard_change(self, content: ClipboardContent) -> bool:
         """Callback from clipboard monitor when new content is detected."""
         # Table fill mode: queue instead of typing
         if self._table_fill_mode:
             self._add_to_table_queue(content)
-            return
+            return True
 
-        self._launch_pipeline(self._typing_pipeline, (content,), "TypingPipeline")
+        return self._launch_pipeline(self._typing_pipeline, (content,), "TypingPipeline")
 
     def _launch_pipeline(self, target, args: tuple, name: str) -> bool:
         """Reserve a session atomically; a live previous worker retains ownership."""
