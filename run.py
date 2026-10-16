@@ -7,6 +7,7 @@ Starts the menu bar app and all background services.
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import signal
 import sys
@@ -29,11 +30,21 @@ def setup_logging() -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
+    root_logger.setLevel(logging.INFO)
 
-    # File handler — verbose
-    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
+    # Reconfiguration must not multiply writes or close host-owned handlers.
+    for handler in list(root_logger.handlers):
+        if getattr(handler, "_ghost_typer_handler", False):
+            root_logger.removeHandler(handler)
+            handler.close()
+
+    # A long-running menu app should have a fixed storage budget (8 MiB).
+    fh = RotatingFileHandler(
+        LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3,
+        encoding="utf-8", delay=True,
+    )
+    fh._ghost_typer_handler = True
+    fh.setLevel(logging.INFO)
     fh.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -42,6 +53,7 @@ def setup_logging() -> None:
 
     # Console handler — info+
     ch = logging.StreamHandler(sys.stderr)
+    ch._ghost_typer_handler = True
     ch.setLevel(logging.INFO)
     ch.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     root_logger.addHandler(ch)
