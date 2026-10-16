@@ -92,13 +92,18 @@ class _Chunk:
 class TypingPlanner:
     """Converts TextSegments into a TypingPlan with realistic mistakes and pauses."""
 
+    # Includes repeats and nested rewrites. Exhaustion falls back to local typing.
+    MAX_DRAFT_REQUESTS_PER_PLAN = 8
+    MAX_REVISIT_REQUESTS_PER_PLAN = 5
+
     def __init__(self, settings: Settings | None = None, ai_rewriter=None, profile: TypingProfile | None = None) -> None:
         self.settings = settings or Settings()
         self._profile = profile or TypingProfile.defaults()
         self.engine = TypingEngine(self.settings, profile=self._profile)
         self._rng = random.Random()
         self._ai_rewriter = ai_rewriter  # AIRewriter instance (optional)
-        self._draft_cache: dict[str, str] = {}  # final_text -> draft_text
+        self._draft_cache: dict[str, str | None] = {}  # final_text -> draft_text
+        self._draft_requests = 0
         self._thought_boundaries: set[int] = set()  # char positions of thought boundaries
         self._human_errors = HumanErrors(
             misspelling_rate=self.settings.error_rate,
@@ -160,9 +165,10 @@ class TypingPlanner:
         # Store behavioral content for use by sub-methods
         self._behavioral_content = behavioral_content or {}
 
-        # Pre-generate AI drafts for rewrite spans (batch call)
-        if not simple and self._ai_rewriter and self._ai_rewriter.is_enabled:
-            self._pre_generate_drafts(segments, total_paste_chars)
+        # Request drafts only for spans that are actually selected. A hard
+        # session budget also covers repeated, cascading, and failed requests.
+        self._draft_cache.clear()
+        self._draft_requests = 0
 
         # Detect thought boundaries via AI
         if not simple:
@@ -173,6 +179,7 @@ class TypingPlanner:
 
         # Reset revisit counter for this planning session
         self._revisit_count = 0
+        self._revisit_requests = 0
 
         # Reset new-feature counters for this planning session
         self._abandon_count = 0
@@ -747,6 +754,11 @@ class TypingPlanner:
         max_revisits = getattr(self.settings, 'revisit_max_per_session', 5)
         if self._revisit_count >= max_revisits:
             return []
+        # Rejected/failed AI proposals still cost a request. Non-ASCII cursor
+        # edits are unsupported, so do not request proposals we cannot execute.
+        if (not typed_so_far.isascii()
+                or getattr(self, "_revisit_requests", 0) >= min(max_revisits, self.MAX_REVISIT_REQUESTS_PER_PLAN)):
+            return []
 
         # Scale probability with text length — more text = more likely to revisit
         base_prob = getattr(self.settings, 'revisit_probability', 0.20)
@@ -761,8 +773,9 @@ class TypingPlanner:
             return []
 
         # Ask AI to pick revision targets from what's been typed so far
+        self._revisit_requests = getattr(self, "_revisit_requests", 0) + 1
         targets = self._ai_rewriter.pick_revisit_targets(
-            typed_so_far, num_targets=self._rng.randint(1, 2)
+            typed_so_far[-2048:], num_targets=self._rng.randint(1, 2)
         )
 
         if not targets:
@@ -999,42 +1012,20 @@ class TypingPlanner:
         return positions
 
     def _get_ai_draft(self, final_text: str, context: str = "") -> str | None:
-        """Get an AI-generated rough draft, using cache. Returns None if unavailable."""
+        """Lazily request a unique draft within this plan's hard call budget."""
         if final_text in self._draft_cache:
             return self._draft_cache[final_text]
-        if self._ai_rewriter and self._ai_rewriter.is_enabled:
-            draft = self._ai_rewriter.generate_first_draft(final_text, context)
-            if draft and draft != final_text:
-                self._draft_cache[final_text] = draft
-                return draft
-        return None
-
-    def _pre_generate_drafts(
-        self, segments: list[TextSegment], total_paste_chars: int
-    ) -> None:
-        """Pre-generate AI drafts in batch for all potential rewrite spans."""
-        if not self._ai_rewriter or not self._ai_rewriter.is_enabled:
-            return
-
-        full_text = "".join(seg.text for seg in segments)
-        positions = self._pick_rewrite_positions(full_text, total_paste_chars)
-
-        spans: list[dict[str, str]] = []
-        seen_texts: set[str] = set()
-
-        for pos, granularity in positions:
-            span_text = self._extract_span(full_text, pos, granularity)
-            if span_text and span_text not in seen_texts:
-                seen_texts.add(span_text)
-                context_start = max(0, pos - 100)
-                context = full_text[context_start:pos]
-                spans.append({"text": span_text, "context": context})
-
-        if spans:
-            drafts = self._ai_rewriter.generate_drafts_batch(spans)
-            for span, draft in zip(spans, drafts):
-                if draft and draft != span["text"]:
-                    self._draft_cache[span["text"]] = draft
+        if (not self._ai_rewriter or not self._ai_rewriter.is_enabled
+                or self._draft_requests >= self.MAX_DRAFT_REQUESTS_PER_PLAN):
+            return None
+        self._draft_requests += 1
+        # Cache failures as well: an unavailable draft must not repeatedly spend
+        # the budget on the same span. AIRewriter handles API failures locally.
+        self._draft_cache[final_text] = None
+        draft = self._ai_rewriter.generate_first_draft(final_text, context)
+        if isinstance(draft, str) and draft and draft != final_text:
+            self._draft_cache[final_text] = draft
+        return self._draft_cache[final_text]
 
     def _extract_span(self, text: str, pos: int, granularity: str) -> str | None:
         """Extract the text span for a rewrite at the given position and granularity."""
