@@ -93,14 +93,20 @@ class TypingEngine:
         self._rng = random.Random()
         self._refresh_effective_wpm()
 
-        # Cache profile key-knowledge sets so we don't rebuild every keystroke
-        self._fast_digraphs: set[str] = set(self.profile.keys.fast_digraphs)
-        self._slow_digraphs: set[str] = set(self.profile.keys.slow_digraphs)
-        self._common_words: set[str] = set(
-            self.profile.keys.common_words + self.profile.keys.text_specific_easy_words
-        )
-        self._common_doubles: set[str] = set(self.profile.keys.common_doubles)
-        self._hunt_keys: set[str] = set(self.profile.keys.hunt_keys)
+    @property
+    def profile(self) -> TypingProfile:
+        return self._profile
+
+    @profile.setter
+    def profile(self, profile: TypingProfile) -> None:
+        self._profile = profile
+        # A new AI session may change key knowledge as well as numeric timing.
+        # Refresh all derived sets together so the previous persona cannot leak.
+        self._fast_digraphs = set(profile.keys.fast_digraphs)
+        self._slow_digraphs = set(profile.keys.slow_digraphs)
+        self._common_words = set(profile.keys.common_words + profile.keys.text_specific_easy_words)
+        self._common_doubles = set(profile.keys.common_doubles)
+        self._hunt_keys = set(profile.keys.hunt_keys)
 
     def _r(self, r: Range) -> float:
         """Sample uniformly from a Range."""
