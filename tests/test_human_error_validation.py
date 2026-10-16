@@ -72,3 +72,16 @@ def test_ascii_temporary_typo_can_restore_a_unicode_source_word():
     assert process(text, {"modified_text": text, "misspellings": [
         {"wrong": "cafe", "correct": "café", "position": 4},
     ]}) == (text, [("cafe", "café", 4)])
+
+
+@pytest.mark.parametrize("control", ["\t", "\r", "\b", "\x00", "\x1b"])
+def test_grammar_edits_cannot_introduce_keyboard_controls(control):
+    text = "The student has a careful plan for tomorrow."
+    modified = text.replace("careful", "care" + control + "ful")
+    assert process(text, {"modified_text": modified}) == (text, [])
+
+
+def test_grammar_edits_preserve_unchanged_source_tabs_and_unicode_formatting():
+    text = "The student\tdoes not know because 👨‍👩‍👧 they are tired."
+    modified = text.replace("does not", "dont")
+    assert process(text, {"modified_text": modified}) == (modified, [])
