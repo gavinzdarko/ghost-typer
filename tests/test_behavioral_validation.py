@@ -1,4 +1,5 @@
 import json
+import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
 from src.ai_planner import AIProfileGenerator
@@ -49,3 +50,31 @@ def test_annotations_are_bounded_and_syllables_must_match_source_word():
     valid = validate_behavioral_content(data, 'example')
     assert len(valid['word_speed_map']) == 100
     assert 'syllable_boundaries' not in valid and 'quote_ranges' not in valid
+
+
+@pytest.mark.parametrize('control', ['\t', '\n', '\r', '\x08', '\x00', '\x1b', '\x7f'])
+def test_inline_edits_cannot_inject_navigation_or_control_characters(control):
+    text = 'An example sentence with teh word.'
+    data = {
+        'word_abandonments': [{'word': 'example', 'replacement': 'sam' + control + 'ple',
+                               'abandon_after_chars': 3}],
+        'sentence_restructures': [{'original_sentence': text,
+                                  'first_draft': 'A draft' + control + 'sentence.'}],
+        'autocorrect_fixes': [{'word': 'teh', 'correct': 'the' + control}],
+        'proofreading_fixes': [{'original': 'teh', 'fixed': 'the' + control}],
+    }
+    p = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0,
+                               punctuation_error_rate=0, false_alarm_rate=0,
+                               rewrite_base_probability=0, rewrite_max_probability=0), ai_enabled=False)
+    p.profile.behaviors.final_proofread.probability = 1
+    p.profile.behaviors.final_proofread.min_text_length = 0
+    plan = p.plan([TextSegment(text)], behavioral_content=data)
+    assert p._behavioral_content == {}
+    assert PlannedText().apply(plan.actions).text == text
+
+
+def test_inline_annotation_phrases_and_unicode_remain_valid():
+    data = {'proofreading_fixes': [{'original': 'their paper', 'fixed': 'there paper'}],
+            'word_abandonments': [{'word': 'approximately', 'replacement': 'à peu près',
+                                   'abandon_after_chars': 4}]}
+    assert validate_behavioral_content(data, 'approximately their paper') == data

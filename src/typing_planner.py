@@ -107,7 +107,11 @@ def validate_behavioral_content(data: object, text: str) -> dict:
                 continue
             def string(name, limit=500):
                 value = entry.get(name)
-                return isinstance(value, str) and 0 < len(value) <= limit
+                # These are inline words/phrases and temporary drafts. Control
+                # characters can navigate the destination (Tab/Return) and make
+                # the subsequent deletion or cursor moves target another field.
+                return (isinstance(value, str) and 0 < len(value) <= limit
+                        and value.isprintable())
             def number(name, low, high, integer=False):
                 value = entry.get(name)
                 return (isinstance(value, (int, float)) and not isinstance(value, bool)
