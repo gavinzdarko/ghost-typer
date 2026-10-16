@@ -80,6 +80,10 @@ Return ONLY a JSON array of integers, nothing else. Example: [0, 145, 289, 512]\
 class HumanErrors:
     """AI-powered human error generator. Falls back to no-op if API unavailable."""
 
+    MAX_REQUESTS_PER_PLAN = 4
+    MAX_INPUT_CHARS = 8000
+    MAX_OUTPUT_TOKENS = 4096
+
     def __init__(
         self,
         misspelling_rate: float = 0.03,
@@ -89,6 +93,7 @@ class HumanErrors:
         api_key: str | None = None,
         enabled: bool = True,
     ):
+        self._requests = 0
         self.misspelling_rate = misspelling_rate
         self.grammar_error_rate = grammar_error_rate
         self.punctuation_error_rate = punctuation_error_rate
@@ -108,6 +113,16 @@ class HumanErrors:
     def is_enabled(self) -> bool:
         return self._enabled and self._client is not None
 
+    def reset_budget(self) -> None:
+        """Each paste receives a bounded budget, including failed requests."""
+        self._requests = 0
+
+    def _reserve_request(self) -> bool:
+        if self._requests >= self.MAX_REQUESTS_PER_PLAN:
+            return False
+        self._requests += 1
+        return True
+
     def process_text(self, text: str) -> tuple[str, list[tuple[str, str, int]]]:
         """Apply all human errors to text using AI.
 
@@ -117,7 +132,8 @@ class HumanErrors:
             - misspellings_to_fix is a list of (wrong, correct, pos) that the
               typing engine should type wrong then fix
         """
-        if not self.is_enabled or not text.strip():
+        if (not self.is_enabled or not text.strip()
+                or len(text) > self.MAX_INPUT_CHARS or not self._reserve_request()):
             return text, []
 
         try:
@@ -151,7 +167,7 @@ class HumanErrors:
         response = self._client.messages.create(
             model="claude-haiku-4-5-20251001",
             timeout=45.0,
-            max_tokens=max(2048, len(text) * 2),
+            max_tokens=min(self.MAX_OUTPUT_TOKENS, max(512, len(text))),
             system=HUMAN_ERRORS_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
@@ -191,8 +207,9 @@ class HumanErrors:
 
         Returns list of character positions where the writer shifts ideas.
         """
-        if not self.is_enabled or len(text) < 50:
+        if not self.is_enabled or len(text) < 50 or not self._reserve_request():
             return []
+        text = text[:self.MAX_INPUT_CHARS]
 
         try:
             response = self._client.messages.create(
