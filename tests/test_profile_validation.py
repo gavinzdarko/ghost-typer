@@ -51,3 +51,33 @@ def test_extreme_ai_profile_cannot_overflow_or_create_hour_long_keystrokes():
     planner = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0,
                                     punctuation_error_rate=0), profile=p, ai_enabled=False)
     assert planner.plan_plain_text('The extreme profile falls back safely.').actions
+
+
+def test_finite_weight_values_cannot_overflow_random_choices_totals():
+    from src.typing_engine import TypingEngine
+
+    profile = TypingProfile.from_dict({
+        "mistakes": {
+            "false_alarm_weights": [1e308, 1e308],
+            "type_weights": {"adjacent": 1e308, "double": 1e308},
+        },
+    })
+    assert profile.mistakes == TypingProfile.defaults().mistakes
+    engine = TypingEngine(profile=profile)
+    assert engine.false_alarm_chars() in (1, 2)
+    assert isinstance(engine.generate_typo("t"), str)
+
+
+def test_bounded_custom_weights_still_select_the_requested_behavior():
+    from src.typing_engine import TypingEngine
+
+    profile = TypingProfile.from_dict({
+        "mistakes": {
+            "false_alarm_weights": [0, 10000],
+            "type_weights": {"adjacent": 0, "transpose_skip": 0,
+                             "double": 10000, "wrong_shift": 0, "drop": 0},
+        },
+    })
+    engine = TypingEngine(profile=profile)
+    assert engine.false_alarm_chars() == 2
+    assert engine.generate_typo("t") == "tt"

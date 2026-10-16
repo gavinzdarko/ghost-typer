@@ -470,7 +470,7 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
             if not isinstance(value, list) or len(value) > 1000:
                 continue
             if key == "false_alarm_weights":
-                if (len(value) == 2 and all(_profile_number(v) and v >= 0 for v in value)
+                if (len(value) == 2 and all(_profile_number(v) and 0 <= v <= 10000 for v in value)
                         and sum(value) > 0):
                     setattr(obj, key, value)
             elif key == "word_speed_map":
@@ -480,7 +480,7 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
                 setattr(obj, key, value)
         elif isinstance(current, dict) and isinstance(value, dict):
             allowed = {k: v for k, v in value.items()
-                       if k in current and _profile_number(v) and v >= 0}
+                       if k in current and _profile_number(v) and 0 <= v <= 10000}
             if key == "type_weights":
                 candidate = {**current, **allowed}
                 if sum(candidate.values()) > 0:
