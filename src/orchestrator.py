@@ -380,6 +380,10 @@ class Orchestrator:
             self._typing_start_time = time.time()
             self.notification_service.notify_start(0)
 
+            # Give the user time to focus the target before sending any keys.
+            if self._wait_for_start():
+                return
+
             # ── Execute live: Tab through cells, type items into empty ones ──
             self.state = OrchestratorState.TYPING
             simulator = KeystrokeSimulator()
@@ -499,8 +503,8 @@ class Orchestrator:
             if (worker and worker.is_alive()) or self.state != OrchestratorState.IDLE:
                 logger.info("Ignoring launch while a previous session is active")
                 return False
-            self.state = OrchestratorState.PLANNING
             self._cancel_event.clear()
+            self.state = OrchestratorState.PLANNING
             try:
                 worker = threading.Thread(target=target, args=args, daemon=True, name=name)
                 self._typing_thread = worker
@@ -574,6 +578,8 @@ class Orchestrator:
                 return
 
             # ── Step 3: Execute the plan ──
+            if self._wait_for_start():
+                return
             self.state = OrchestratorState.TYPING
             simulator = KeystrokeSimulator()
             self._simulator = simulator
@@ -639,6 +645,11 @@ class Orchestrator:
             self._simulator = None
             if self.state != OrchestratorState.IDLE:
                 self.state = OrchestratorState.IDLE
+
+    def _wait_for_start(self) -> bool:
+        """Wait the configured focus delay; True means the session was cancelled."""
+        delay = max(0.0, float(self.clipboard_monitor.start_delay))
+        return self._cancel_event.wait(delay)
 
     def _execute_plan(
         self, plan: TypingPlan, engine: TypingEngine, simulator: KeystrokeSimulator
