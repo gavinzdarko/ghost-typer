@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+from difflib import SequenceMatcher
 from typing import Optional
 
 import anthropic
@@ -172,35 +173,102 @@ class HumanErrors:
             messages=[{"role": "user", "content": user_prompt}],
         )
 
+        if getattr(response, "stop_reason", None) == "max_tokens" or not response.content:
+            return text, []
         response_text = response.content[0].text.strip()
 
         # Parse JSON
         data = self._parse_json(response_text)
-        if not data:
+        if not isinstance(data, dict):
             return text, []
 
         modified_text = data.get("modified_text", text)
+        if not self._valid_modified_text(text, modified_text):
+            return text, []
         raw_misspellings = data.get("misspellings", [])
+        if not isinstance(raw_misspellings, list):
+            raw_misspellings = []
 
         # Convert misspellings to tuple format, validating positions
         misspellings: list[tuple[str, str, int]] = []
-        for m in raw_misspellings:
+        for m in raw_misspellings[:100]:
+            if not isinstance(m, dict):
+                continue
             wrong = m.get("wrong", "")
             correct = m.get("correct", "")
             pos = m.get("position", -1)
-            if wrong and correct and pos >= 0:
+            if (isinstance(wrong, str) and isinstance(correct, str)
+                    and wrong and correct and len(wrong) <= 100 and len(correct) <= 100
+                    and wrong.isascii() and wrong.isprintable()
+                    and not any(c.isspace() for c in wrong + correct)
+                    and isinstance(pos, int) and not isinstance(pos, bool) and pos >= 0):
                 # Validate the position — the correct word should be at that position
                 if pos < len(modified_text):
                     actual_word = modified_text[pos:pos + len(correct)]
                     if actual_word.lower() == correct.lower():
-                        misspellings.append((wrong, correct, pos))
+                        misspellings.append((wrong, actual_word, pos))
                     else:
                         # Try to find the word nearby (AI positions can be off)
                         found_pos = self._find_word_near(modified_text, correct, pos)
                         if found_pos >= 0:
-                            misspellings.append((wrong, correct, found_pos))
+                            misspellings.append((wrong, modified_text[found_pos:found_pos + len(correct)], found_pos))
 
         return modified_text, misspellings
+
+    @staticmethod
+    def _valid_modified_text(original: str, modified: object) -> bool:
+        """Permit sparse grammar edits, never wholesale AI replacement or lost lines."""
+        if not isinstance(modified, str):
+            return False
+        before, after = original.split("\n"), modified.split("\n")
+        if len(before) != len(after):
+            return False
+        for source, result in zip(before, after):
+            if not source.strip():
+                if result != source:
+                    return False
+                continue
+            if not result.strip() or len(result) > len(source) * 1.25:
+                return False
+            # Trim shared edges before matching: one typo in repetitive text
+            # must not make an 8000-character line a quadratic comparison.
+            prefix = 0
+            limit = min(len(source), len(result))
+            while prefix < limit and source[prefix] == result[prefix]:
+                prefix += 1
+            suffix = 0
+            while (suffix < limit - prefix
+                   and source[len(source) - suffix - 1] == result[len(result) - suffix - 1]):
+                suffix += 1
+            source_end = len(source) - suffix
+            result_end = len(result) - suffix
+            changed_source, changed_result = source[prefix:source_end], result[prefix:result_end]
+            matcher = SequenceMatcher(None, changed_source, changed_result, autojunk=True)
+            matched = prefix + suffix + sum(block.size for block in matcher.get_matching_blocks())
+            if 2 * matched / (len(source) + len(result)) < .8:
+                return False
+            for tag, start, end, result_start, result_end in matcher.get_opcodes():
+                if tag == "equal":
+                    continue
+                removed = changed_source[start:end]
+                inserted = changed_result[result_start:result_end]
+                # AI grammar edits must not add or remove keyboard controls.
+                # Keep source tabs and Unicode formatting intact when they
+                # are unchanged, but never turn prose into Tab/Return/etc.
+                if any(not char.isprintable() for char in removed + inserted):
+                    return False
+                # Grammar and punctuation mistakes are small local edits. A
+                # similar surrounding paragraph cannot justify losing a sentence
+                # or substituting a large section of clipboard text.
+                if max(len(removed), len(inserted)) > 24:
+                    return False
+                if re.search(r"\w[^.!?]*[.!?](?:\s|$)", removed):
+                    return False
+            # Preserve paragraph indentation and separators exactly.
+            for pattern in (r"^\s*", r"\s*$"):
+                if re.search(pattern, source).group() != re.search(pattern, result).group():
+                    return False
+        return True
 
     def find_thought_boundaries(self, text: str) -> list[int]:
         """Use AI to identify thought boundary positions in text.
