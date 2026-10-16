@@ -381,9 +381,10 @@ class TypingPlanner:
             char = text[i]
 
             # Occasional single-char mistake (backspace and fix, no arrow keys)
-            if char.isalpha() and self._rng.random() < self.settings.error_rate:
+            if char.isascii() and char.isalpha() and self._rng.random() < self.settings.error_rate:
                 typo_char = self.engine.generate_typo(char)
-                if typo_char and typo_char != char and len(typo_char) == 1:
+                if (typo_char and typo_char != char and len(typo_char) == 1
+                        and typo_char.isascii() and typo_char.isprintable()):
                     # Type wrong char, backspace, type correct
                     actions.append(TypeText(text=typo_char))
                     actions.append(Rewrite.simple(delete_count=1, text=char))
@@ -397,7 +398,7 @@ class TypingPlanner:
             # Consume its source character normally instead of rerolling the
             # same position forever when the configured error rate is 100%.
             i += 1
-            while i < len(text) and not (text[i].isalpha() and self._rng.random() < self.settings.error_rate):
+            while i < len(text) and not (text[i].isascii() and text[i].isalpha() and self._rng.random() < self.settings.error_rate):
                 i += 1
                 if i - run_start > 8:  # break runs to keep them natural
                     break
@@ -606,7 +607,10 @@ class TypingPlanner:
                     word_misspells[match.start()] = (wrong, word, len(word))
 
         # --- Pre-scan for single-char mistake positions (adjacent key misclicks) ---
-        mistake_positions = self._pick_mistake_positions(text)
+        # Delayed corrections may backspace through following source text.
+        # Native editors delete graphemes, so Unicode code-point counts cannot
+        # safely identify the characters to remove. Keep natural typing timing.
+        mistake_positions = self._pick_mistake_positions(text) if text.isascii() else set()
         rewrite_positions_list = self._pick_rewrite_positions(text, total_paste_chars)
         # Build a dict: pos -> granularity for quick lookup
         rewrite_positions: dict[int, str] = {pos: gran for pos, gran in rewrite_positions_list}
@@ -695,7 +699,7 @@ class TypingPlanner:
 
                 # Research: 35-44% of backspace presses are false alarms.
                 # Occasionally backspace correct text then retype it.
-                if len(run_text) >= 3 and self.engine.should_false_alarm():
+                if text.isascii() and len(run_text) >= 3 and self.engine.should_false_alarm():
                     fa_chars = min(self.engine.false_alarm_chars(), len(run_text))
                     deleted_text = run_text[-fa_chars:]
                     actions.append(Pause(duration=self._rng.uniform(0.2, 0.5)))
