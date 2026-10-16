@@ -45,6 +45,8 @@ class ProgressOverlay:
         self._tick_timer: AppKit.NSTimer | None = None
         self._planning_mode: bool = False
         self._planning_dots: int = 0
+        self._paused_at: float | None = None
+        self._paused_seconds: float = 0.0
 
     def _ensure_window(self) -> bool:
         """Create the overlay window if it doesn't exist yet. Returns True if ready."""
@@ -108,6 +110,8 @@ class ProgressOverlay:
         """Show the overlay in planning mode with animated dots. Main thread only."""
         if self._ensure_window():
             self._planning_mode = True
+            self._paused_at = None
+            self._paused_seconds = 0.0
             self._planning_dots = 0
             self._bar_view.setProgress_(-1.0)  # indeterminate
             self._label.setStringValue_("Planning")
@@ -120,24 +124,44 @@ class ProgressOverlay:
             self._start_tick_timer()
 
     def show(self) -> None:
-        """Show the overlay window. Must be called on main thread."""
+        """Show a new session, or resume the existing paused session."""
         if self._ensure_window():
             self._planning_mode = False
-            self._bar_view.setProgress_(0.0)
-            self._label.setStringValue_("--")
-            self._locked_total_time = 0.0
-            self._lock_pct = 0.0
-            self._lock_time = 0.0
-            self._last_eta_str = ""
-            self._start_time = 0.0
+            if self._paused_at is not None:
+                self._paused_seconds += max(0.0, time.time() - self._paused_at)
+                self._paused_at = None
+                self._bar_view.setProgress_(self._pct)
+                self._update_countdown()
+            else:
+                self._pct = 0.0
+                self._bar_view.setProgress_(0.0)
+                self._label.setStringValue_("--")
+                self._locked_total_time = 0.0
+                self._lock_pct = 0.0
+                self._lock_time = 0.0
+                self._last_eta_str = ""
+                self._start_time = 0.0
+                self._paused_seconds = 0.0
             self._window.orderFront_(None)
             self._start_tick_timer()
 
     def hide(self) -> None:
-        """Hide the overlay (keeps window alive). Must be called on main thread."""
+        """Hide the overlay after a session finishes or is cancelled."""
+        self._paused_at = None
         self._stop_tick_timer()
         if self._window:
             self._window.orderOut_(None)
+
+    def pause(self) -> None:
+        """Hide while preserving progress and excluding the paused interval."""
+        if self._paused_at is None:
+            paused_at = time.time()
+            self.hide()
+            self._paused_at = paused_at
+
+    def _active_elapsed(self) -> float:
+        now = self._paused_at if self._paused_at is not None else time.time()
+        return max(0.0, now - self._start_time - self._paused_seconds)
 
     def destroy(self) -> None:
         """Final cleanup at app quit. After this, the overlay is unusable."""
@@ -166,9 +190,10 @@ class ProgressOverlay:
             self._locked_total_time = estimated_total
 
         pct = min(1.0, chars_typed / total_chars)
+        self._pct = pct
         self._bar_view.setProgress_(pct)
 
-        elapsed = time.time() - start_time if start_time > 0 else 0
+        elapsed = self._active_elapsed() if self._start_time > 0 else 0
 
         # Refine estimate once we have real typing data
         if pct >= 0.05 and elapsed > 1:
@@ -195,7 +220,7 @@ class ProgressOverlay:
         if not self._label or self._locked_total_time <= 0 or self._start_time <= 0:
             return
 
-        elapsed = time.time() - self._start_time
+        elapsed = self._active_elapsed()
         remaining = max(0, self._locked_total_time - elapsed)
         remaining_sec = int(remaining)
 
