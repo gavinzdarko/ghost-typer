@@ -83,7 +83,12 @@ class ClipboardMonitor:
         with self._clipboard_lock:
             self._enabled = value
             if not value:
-                self._restore_staged_clipboard()
+                try:
+                    self._restore_staged_clipboard()
+                except Exception:
+                    # Turning OFF must still reach the orchestrator's cancel
+                    # path even if the OS rejects clipboard restoration.
+                    logger.exception("Failed to restore staged clipboard content")
         logger.info("Clipboard monitor %s", "enabled" if value else "disabled")
 
     @contextmanager

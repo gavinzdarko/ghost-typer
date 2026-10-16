@@ -42,3 +42,12 @@ def test_accepted_paste_is_not_restored_at_shutdown():
         monitor.trigger_paste()
         monitor.stop()
         assert not pb.items
+
+
+def test_restore_failure_does_not_prevent_turning_off():
+    pb = Pasteboard()
+    with pasteboard_patch(pb):
+        monitor = capture(pb)
+        pb.writeObjects_ = Mock(side_effect=RuntimeError('pasteboard unavailable'))
+        monitor.enabled = False
+        assert not monitor.enabled
