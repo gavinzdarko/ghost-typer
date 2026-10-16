@@ -9,10 +9,17 @@ import json
 import logging
 import os
 import threading
-import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
 from typing import Callable, Optional
+
+try:
+    import tkinter as tk
+    from tkinter import messagebox, ttk
+except ImportError:
+    # The rumps menu uses persistence without opening the optional Tk window.
+    # Homebrew Python can omit Tk; this must not prevent the app from starting.
+    tk = None
+    messagebox = ttk = None
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +102,8 @@ class SettingsWindow:
 
     def show(self) -> None:
         """Open the settings window in a separate thread so it doesn't block rumps."""
+        if tk is None:
+            raise RuntimeError("The standalone settings window requires Python with Tk support")
         if self._thread and self._thread.is_alive():
             logger.info("Settings window already open")
             return

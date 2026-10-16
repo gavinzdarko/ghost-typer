@@ -79,8 +79,12 @@ def main() -> None:
     logger.info("Ghost Typer starting up")
 
     # Import after path setup
-    from src.orchestrator import Orchestrator
-    from src.menu_bar_app import GhostTyperApp
+    if __package__:
+        from .src.orchestrator import Orchestrator
+        from .src.menu_bar_app import GhostTyperApp
+    else:
+        from src.orchestrator import Orchestrator
+        from src.menu_bar_app import GhostTyperApp
 
     orchestrator = Orchestrator()
     orchestrator.start()

@@ -19,16 +19,20 @@ A macOS menu bar app that types text from your clipboard with realistic human-li
 ### Requirements
 
 - macOS 12+
-- Python 3.9+
+- Python 3.10+
 - An [Anthropic API key](https://console.anthropic.com/) (for AI features)
 
 ### Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ghost-typer.git
+git clone https://github.com/gavinzdarko/ghost-typer.git
 cd ghost-typer
 pip3 install -r requirements.txt
 ```
+
+Alternatively, install the package with `pip3 install .` and run `ghost-typer`.
+OCR dependencies are optional: `pip3 install '.[verification]'` (also requires
+the Tesseract executable). Development checks use `pip3 install '.[dev]'`.
 
 ### Configure API Key
 
