@@ -612,7 +612,7 @@ class TypingPlanner:
             # Check for whole-word misspelling at this position
             if i in word_misspells:
                 wrong, correct, word_len = word_misspells[i]
-                misspell_actions, extra_skip = self._build_word_misspelling(wrong, correct)
+                misspell_actions, extra_skip = self._build_word_misspelling(wrong, correct, text[i + word_len:])
                 actions.extend(misspell_actions)
                 char_count += len(correct) + extra_skip
                 i += word_len + extra_skip
@@ -911,7 +911,7 @@ class TypingPlanner:
     # ------------------------------------------------------------------
 
     def _build_word_misspelling(
-        self, wrong: str, correct: str
+        self, wrong: str, correct: str, trailing_text: str = ""
     ) -> tuple[list[TypingAction], int]:
         """Type a misspelled word, pause as if noticing, backspace only to
         where the word diverges, then retype the rest correctly.
@@ -944,7 +944,7 @@ class TypingPlanner:
         actions.append(TypeText(text=wrong))
 
         # Sometimes notice immediately, sometimes type a space first then notice
-        if self._rng.random() < self.profile.misspelling.notice_after_space_probability:
+        if trailing_text.startswith(" ") and self._rng.random() < self.profile.misspelling.notice_after_space_probability:
             # Type the space after the word, then notice
             actions.append(TypeText(text=" "))
             actions.append(Pause(duration=self._r(self.profile.misspelling.notice_after_space_pause)))
