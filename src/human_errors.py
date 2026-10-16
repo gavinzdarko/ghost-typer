@@ -252,6 +252,11 @@ class HumanErrors:
                     continue
                 removed = changed_source[start:end]
                 inserted = changed_result[result_start:result_end]
+                # AI grammar edits must not add or remove keyboard controls.
+                # Keep source tabs and Unicode formatting intact when they
+                # are unchanged, but never turn prose into Tab/Return/etc.
+                if any(not char.isprintable() for char in removed + inserted):
+                    return False
                 # Grammar and punctuation mistakes are small local edits. A
                 # similar surrounding paragraph cannot justify losing a sentence
                 # or substituting a large section of clipboard text.
