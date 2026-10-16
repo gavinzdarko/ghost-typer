@@ -99,6 +99,8 @@ class Orchestrator:
 
         # Behavioral content (AI-generated, or empty dict)
         self._behavioral_content: dict = {}
+        self._profile_executor = None
+        self._profile_futures = set()
 
         # Stats
         self._current_word_count = 0
@@ -149,6 +151,9 @@ class Orchestrator:
         """Shut down everything gracefully."""
         self.cancel()
         self.clipboard_monitor.stop()
+        if self._profile_executor is not None:
+            self._profile_executor.shutdown(wait=False, cancel_futures=True)
+            self._profile_executor = None
         logger.info("Orchestrator stopped")
 
     def enable(self) -> None:
@@ -584,22 +589,7 @@ class Orchestrator:
 
             # ── Step 1.5: Generate AI typing profile ──
             full_text = "".join(seg.text for seg in segments)
-            if self.ai_profile_generator.is_enabled:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                    profile_future = pool.submit(
-                        self.ai_profile_generator.generate_profile, full_text
-                    )
-                    behavioral_future = pool.submit(
-                        self.ai_profile_generator.generate_behavioral_content, full_text
-                    )
-                    self._profile = profile_future.result(timeout=35)
-                    self._behavioral_content = behavioral_future.result(timeout=50)
-                logger.info("AI profile generated: %s", self._profile.persona_description)
-            else:
-                self._profile = TypingProfile.defaults()
-                self._behavioral_content = {}
-
+            self._profile, self._behavioral_content = self._generate_session_behaviors(full_text)
             if self._cancel_event.is_set():
                 return
 
@@ -682,6 +672,50 @@ class Orchestrator:
             self._simulator = None
             if self.state != OrchestratorState.IDLE:
                 self.state = OrchestratorState.IDLE
+
+    def _generate_session_behaviors(self, text: str) -> tuple[TypingProfile, dict]:
+        """Fall back independently on failure and release cancelled sessions promptly.
+
+        At most two calls stay in flight, including calls abandoned by a cancelled
+        session. Their late results never mutate a subsequent session's profile.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        generator = self.ai_profile_generator
+        defaults = (TypingProfile.defaults(), {})
+        if (not generator.is_enabled or self._cancel_event.is_set()
+                or any(not future.done() for future in self._profile_futures)):
+            return defaults
+        if self._profile_executor is None:
+            self._profile_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="Profile")
+        started = time.monotonic()
+        profile = self._profile_executor.submit(generator.generate_profile, text)
+        behavior = self._profile_executor.submit(generator.generate_behavioral_content, text)
+        self._profile_futures = {profile, behavior}
+        pending = {profile: (0, 35.0), behavior: (1, 50.0)}
+        results = list(defaults)
+        try:
+            while pending and not self._cancel_event.is_set():
+                elapsed = time.monotonic() - started
+                for future, (index, limit) in list(pending.items()):
+                    if future.done():
+                        try:
+                            value = future.result()
+                            if isinstance(value, TypingProfile if index == 0 else dict):
+                                results[index] = value
+                        except Exception:
+                            logger.warning("AI session behavior failed; using defaults", exc_info=True)
+                        del pending[future]
+                    elif elapsed >= limit:
+                        future.cancel()
+                        del pending[future]
+                        logger.warning("AI session behavior timed out; using defaults")
+                if pending:
+                    self._cancel_event.wait(0.05)
+        finally:
+            for future in pending:
+                future.cancel()
+        return tuple(results)
 
     def _wait_for_start(self) -> bool:
         """Wait the configured focus delay; True means the session was cancelled."""
