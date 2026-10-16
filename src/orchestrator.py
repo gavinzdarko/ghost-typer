@@ -78,15 +78,16 @@ class Orchestrator:
         # AI components — use settings API key if available
         from .settings_ui import get_api_key
         _api_key = get_api_key() or None
-        self.ai_planner = AIPlanner(self._settings, api_key=_api_key)
-        self.ai_rewriter = AIRewriter(api_key=_api_key)
-        self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=_api_key)
+        ai_enabled = self._settings_dict.get("ai_enabled", True)
+        self.ai_planner = AIPlanner(self._settings, api_key=_api_key, enabled=ai_enabled)
+        self.ai_rewriter = AIRewriter(api_key=_api_key, enabled=ai_enabled)
+        self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=_api_key, enabled=ai_enabled)
         self.visual_verifier = VisualVerifier(
             enabled=self._settings_dict.get("verify_after_typing", False),
         )
 
         # Fallback planner (rule-based, with AI rewriter for drafts)
-        self.fallback_planner = TypingPlanner(self._settings, ai_rewriter=self.ai_rewriter)
+        self.fallback_planner = TypingPlanner(self._settings, ai_rewriter=self.ai_rewriter, ai_enabled=ai_enabled, api_key=_api_key)
 
         # Typing state
         self._state = OrchestratorState.IDLE

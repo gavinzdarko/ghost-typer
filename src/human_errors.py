@@ -86,12 +86,14 @@ class HumanErrors:
         grammar_error_rate: float = 0.15,
         punctuation_error_rate: float = 0.2,
         seed: int | None = None,
+        api_key: str | None = None,
+        enabled: bool = True,
     ):
         self.misspelling_rate = misspelling_rate
         self.grammar_error_rate = grammar_error_rate
         self.punctuation_error_rate = punctuation_error_rate
 
-        self._api_key = os.getenv("ANTHROPIC_API_KEY")
+        self._api_key = (api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")) if enabled else None
         self._client: Optional[anthropic.Anthropic] = None
         self._enabled = bool(self._api_key)
 
