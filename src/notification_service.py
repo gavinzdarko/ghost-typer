@@ -156,8 +156,10 @@ class NotificationService:
                         timeout=10,
                     )
                 logger.info("Webhook notification sent")
-            except Exception:
-                logger.exception("Failed to send webhook notification")
+            except Exception as exc:
+                # Request exceptions can embed the full destination URL,
+                # including webhook tokens, credentials, and query secrets.
+                logger.warning("Failed to send webhook notification (%s)", type(exc).__name__)
 
         self._enqueue(_do_send)
 

@@ -31,3 +31,17 @@ def test_webhook_uses_enqueued_destination_and_does_not_log_secrets(caplog):
         operations[0]()
     assert post.call_args.args[0] == 'https://example.test/secret-token'
     assert 'secret-token' not in caplog.text
+
+
+def test_failed_webhook_does_not_log_credential_bearing_exception(caplog):
+    import requests
+    secret_url = 'https://user:password@example.test/secret-token?key=private-key'
+    service = NotificationService(secret_url)
+    operations = []
+    service._enqueue = operations.append
+    service._send_webhook('title', 'message')
+    with patch('src.notification_service.requests.post',
+               side_effect=requests.ConnectionError('Failed to connect to ' + secret_url)):
+        operations[0]()
+    assert 'ConnectionError' in caplog.text
+    assert all(secret not in caplog.text for secret in ('password', 'secret-token', 'private-key'))
