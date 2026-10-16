@@ -115,6 +115,8 @@ class TypingPlanner:
         self._word_speed_cache: dict[str, float] | None = None
         self._pending_autocorrects: list[dict] = []
         self._char_position = 0
+        self._typed_prefix = ""
+        self._chunk_prefix = ""
 
     @property
     def profile(self) -> TypingProfile:
@@ -187,6 +189,7 @@ class TypingPlanner:
         navigation_valid = True
 
         for seg_idx, segment in enumerate(segments):
+            self._typed_prefix = typed_so_far
             if simple:
                 seg_actions, seg_chars = self._plan_segment_simple(segment)
             else:
@@ -216,8 +219,7 @@ class TypingPlanner:
 
         # --- Final proofreading pass (Feature 13) ---
         if not simple:
-            full_text = "".join(seg.text for seg in segments)
-            proofread_actions = self._build_final_proofread(full_text)
+            proofread_actions = self._build_final_proofread(typed_so_far) if navigation_valid else []
             if proofread_actions:
                 actions.extend(proofread_actions)
 
@@ -271,10 +273,9 @@ class TypingPlanner:
         sentences_since_thought_pause = 0
         # Every 2-4 sentences without a thought boundary, insert a thought pause
         next_thought_pause_at = self._rng.randint(self.profile.pauses.thought_pause_sentences_interval.min, self.profile.pauses.thought_pause_sentences_interval.max)
-        # Track chars typed since last proofread for navigation distance
-        chars_since_last_proofread = 0
-        # Accumulate uncorrected typos: (wrong_char, correct_char, distance_from_proofread_start)
-        pending_typos: list[tuple[str, str, int]] = []
+        emitted = PlannedText(self._typed_prefix, track_typos=True,
+                              max_typo_distance=self.profile.proofread.max_proofread_distance)
+        applied_actions = 0
 
         for chunk in chunks:
             # Track sentences and inject periodic thought pauses
@@ -314,6 +315,7 @@ class TypingPlanner:
                     restructured = True
 
             if not restructured:
+                self._chunk_prefix = emitted.text
                 chunk_actions, chunk_chars, chunk_typos = self._plan_chunk(
                     chunk, misspell_by_word=misspell_by_word, total_paste_chars=total_paste_chars
                 )
@@ -321,24 +323,28 @@ class TypingPlanner:
                 char_count += chunk_chars
                 self._chars_since_distraction += chunk_chars
 
-                # Track uncorrected typos with position relative to proofread window
-                for wrong_char, correct_char, pos_in_chunk in chunk_typos:
-                    pending_typos.append((wrong_char, correct_char, chars_since_last_proofread + pos_in_chunk))
-                chars_since_last_proofread += chunk_chars
+            # Replay only the new actions, rather than the entire paragraph
+            # prefix on every chunk (quadratic for large pastes).
+            emitted.apply(actions[applied_actions:])
+            applied_actions = len(actions)
 
             # Proofread at sentence/paragraph boundaries — only if there are real typos to fix
-            if (chunk.is_sentence_end or chunk.is_paragraph_end) and pending_typos:
+            if (chunk.is_sentence_end or chunk.is_paragraph_end) and emitted.typos:
                 if self._rng.random() < self.settings.proofread_probability:
-                    proof_actions = self._build_proofread(pending_typos, chars_since_last_proofread)
+                    proof_actions = self._build_proofread(
+                        emitted.typos, len(emitted.text),
+                        known_text=emitted.text if emitted.valid else "",
+                    )
                     actions.extend(proof_actions)
-                    pending_typos.clear()
-                    chars_since_last_proofread = 0
 
             # --- Distraction pauses (Feature 7) ---
             if chunk.is_sentence_end or chunk.is_paragraph_end:
                 distraction = self._maybe_insert_distraction(self._char_position)
                 if distraction:
                     actions.append(distraction)
+
+            emitted.apply(actions[applied_actions:])
+            applied_actions = len(actions)
 
         # --- No formatting to untoggle (plain text mode) ---
 
@@ -627,10 +633,15 @@ class TypingPlanner:
             # Check for single-char mistake (adjacent key misclick)
             if i in mistake_positions:
                 mistake_actions, mistake_chars, uncorrected = self._build_mistake(text, i)
-                actions.extend(mistake_actions)
                 if uncorrected:
-                    # Track position in typed output for proofreading
-                    uncorrected_typos.append((uncorrected[0], uncorrected[1], char_count))
+                    # Anchor to the actual emitted action. Replay moves this
+                    # marker through earlier insertions/deletions/autocorrects.
+                    offset = 1 if uncorrected[1] == "" else 0
+                    for typed in mistake_actions:
+                        if isinstance(typed, TypeText) and typed.text[offset:offset + len(uncorrected[0])] == uncorrected[0]:
+                            typed.proofread_typo = (*uncorrected, offset)
+                            break
+                actions.extend(mistake_actions)
                 char_count += mistake_chars
                 i += mistake_chars
                 continue
@@ -686,70 +697,31 @@ class TypingPlanner:
     # ------------------------------------------------------------------
 
     def _build_proofread(
-        self,
-        typos: list[tuple[str, str, int]],
-        total_chars_typed: int,
+        self, typos: list[tuple[str, str, int]], total_chars_typed: int,
+        known_text: str | None = None,
     ) -> list[TypingAction]:
-        """Build a proofread pass: single sweep from end to start, fixing real typos.
-
-        Arrows left from the cursor to each typo position (closest first,
-        sweeping leftward), fixes it with the correct character, then
-        Cmd+Down once at the end to jump back.
-        """
-        actions: list[TypingAction] = []
-
-        # Convert typo positions to distances-back-from-cursor, filter reachable ones
-        fixable: list[tuple[int, str]] = []  # (chars_back, correct_char)
-        for wrong_char, correct_char, typo_pos in typos:
-            chars_back = total_chars_typed - typo_pos
-            if 1 <= chars_back <= self.profile.proofread.max_proofread_distance:
-                fixable.append((chars_back, correct_char))
-
-        if not fixable:
-            return actions
-
-        # Sort by distance: closest first (ascending), so we sweep left
-        fixable.sort(key=lambda x: x[0])
-
-        # Pause — re-reading what they just typed
-        actions.append(Pause(
-            duration=self._r(self.profile.proofread.re_reading_pause),
-            description="Re-reading sentence",
-        ))
-
-        cursor_moved = 0  # how far left we've moved from end
-
-        for chars_back, correct_char in fixable:
-            # Arrow left from current position to reach this typo
-            move = chars_back - cursor_moved
-            if move <= 0:
+        """Correct only verified emitted typo characters with relative moves."""
+        if known_text is None or not known_text.isascii():
+            return []
+        actions = []
+        text = known_text
+        # Correct right to left so deletions do not shift earlier positions.
+        for wrong, correct, offset in sorted(typos, key=lambda t: t[2], reverse=True):
+            distance = total_chars_typed - offset
+            pos = len(known_text) - distance
+            if not 1 <= distance <= self.profile.proofread.max_proofread_distance:
                 continue
-            for _ in range(move):
-                actions.append(PressKey(key="left"))
-            cursor_moved = chars_back
-
-            # Small pause — spotted the error
-            actions.append(Pause(
-                duration=self._r(self.profile.proofread.found_typo_pause),
-                description="Found a typo",
-            ))
-
-            # Fix: right past the wrong char, backspace it, type the correct one
-            actions.append(PressKey(key="right"))
-            actions.append(PressKey(key="backspace"))
-            actions.append(TypeText(text=correct_char))
-            # After right+backspace+type, cursor ends up 1 position right of
-            # where the sweep landed (i.e. 1 closer to the end of the text).
-            cursor_moved = chars_back - 1
-
-        # Done sweeping — jump back to end of document once
-        actions.append(Pause(duration=self._r(self.profile.proofread.done_sweeping_pause)))
-        actions.append(ApplyFormatting(
-            format_type=FormatType.BOLD,  # dummy — we just want the hotkey
-            shortcut=("cmd", "down"),
-            description="Jump to end of document",
-        ))
-
+            if not (0 <= pos < len(text)) or text[pos:pos + len(wrong)] != wrong:
+                continue
+            if not wrong.isascii() or not correct.isascii():
+                continue
+            tail = len(text) - pos - len(wrong)
+            actions.append(Pause(duration=self._r(self.profile.proofread.found_typo_pause), description="Found a typo"))
+            actions.extend(PressKey(key="left") for _ in range(len(text) - pos))
+            actions.extend(ApplyFormatting(shortcut=("shift", "right")) for _ in wrong)
+            actions.append(TypeText(text=correct) if correct else PressKey(key="backspace"))
+            actions.extend(PressKey(key="right") for _ in range(tail))
+            text = text[:pos] + correct + text[pos + len(wrong):]
         return actions
 
     # ------------------------------------------------------------------
@@ -1752,231 +1724,74 @@ class TypingPlanner:
     # ------------------------------------------------------------------
 
     def _track_autocorrect_words(self, run_text: str, actions: list[TypingAction]) -> None:
-        """After typing words, check if any trigger an autocorrect fix.
-
-        If a word matches an autocorrect entry, schedule a deferred fix
-        that will be inserted after a few more words.
-        """
+        """Defer verified, unique emitted words; AI offsets never select text."""
         cfg = self.profile.behaviors.autocorrect
-        if not cfg.enabled:
+        if not cfg.enabled or self._autocorrect_count >= cfg.max_per_session:
             return
-        if self._autocorrect_count >= cfg.max_per_session:
-            return
-
-        autocorrect_fixes = self._behavioral_content.get("autocorrect_fixes", [])
-        if not autocorrect_fixes:
-            return
-
-        # Check words in the run text
-        words = re.findall(r"\b\w+\b", run_text)
-        for word in words:
-            for fix in autocorrect_fixes:
-                if fix.get("word", "").lower() == word.lower():
-                    correct = fix.get("correct", word)
-                    if correct.lower() == word.lower():
-                        continue
-                    # Schedule this fix — count words typed after, then navigate back
-                    words_back = self._rng.randint(cfg.min_words_back, cfg.max_words_back)
-                    self._pending_autocorrects.append({
-                        "word": word,
-                        "correct": correct,
-                        "words_remaining": words_back,
-                    })
-                    break
-
-        # Decrement counters and emit fixes that are ready
-        still_pending = []
+        words = list(re.finditer(r"\b\w+\b", run_text))
         for pending in self._pending_autocorrects:
             pending["words_remaining"] -= len(words)
-            if pending["words_remaining"] <= 0 and self._autocorrect_count < cfg.max_per_session:
-                # Emit the autocorrect navigation sequence
-                fix_actions = self._build_autocorrect_fix(
-                    pending["word"], pending["correct"],
-                    abs(pending["words_remaining"]) + cfg.min_words_back,
-                )
-                actions.extend(fix_actions)
-                self._autocorrect_count += 1
-            else:
+        for idx, match in enumerate(words):
+            for fix in self._behavioral_content.get("autocorrect_fixes", []):
+                word, correct = match.group(), fix.get("correct", "")
+                if fix.get("word") == word and correct and correct != word:
+                    if not any(p["word"] == word for p in self._pending_autocorrects):
+                        self._pending_autocorrects.append({
+                            "word": word, "correct": correct,
+                            "words_remaining": self._rng.randint(cfg.min_words_back, cfg.max_words_back) - (len(words) - idx - 1),
+                        })
+                    break
+        still_pending = []
+        for pending in self._pending_autocorrects:
+            if pending["words_remaining"] > 0:
                 still_pending.append(pending)
+                continue
+            state = PlannedText(self._chunk_prefix).apply(actions)
+            edits = self._build_autocorrect_fix(
+                pending["word"], pending["correct"],
+                known_text=state.text if state.valid else "",
+            )
+            if edits and self._autocorrect_count < cfg.max_per_session:
+                actions.extend(edits)
+                self._autocorrect_count += 1
         self._pending_autocorrects = still_pending
 
     def _build_autocorrect_fix(
-        self, wrong_word: str, correct_word: str, words_back: int,
+        self, wrong_word: str, correct_word: str, words_back: int = 0,
+        *, known_text: str | None = None,
     ) -> list[TypingAction]:
-        """Build the autocorrect navigation sequence.
-
-        Sequence:
-        1. Pause (noticed squiggly)
-        2. Opt+Left × words_back (word jump back)
-        3. Opt+Shift+Right (select word)
-        4. Pause
-        5. TypeText(correct_word)
-        6. Cmd+Down (jump to end)
-        7. Pause (resuming)
-        """
-        cfg = self.profile.behaviors.autocorrect
-        actions: list[TypingAction] = []
-
-        # 1. Pause — noticed the squiggly underline
-        actions.append(Pause(
-            duration=self._r(cfg.notice_pause),
-            description="Noticed autocorrect squiggly",
-        ))
-
-        # 2. Word jump back
-        for _ in range(words_back):
-            actions.append(ApplyFormatting(
-                format_type=FormatType.BOLD,  # dummy — just want the hotkey
-                shortcut=("opt", "left"),
-                description="Word jump back",
-            ))
-
-        # 3. Select the word
-        actions.append(ApplyFormatting(
-            format_type=FormatType.BOLD,
-            shortcut=("opt", "shift", "right"),
-            description="Select word for autocorrect",
-        ))
-
-        # 4. Pause — found the word
-        actions.append(Pause(
-            duration=self._r(cfg.found_word_pause),
-            description="Found the misspelled word",
-        ))
-
-        # 5. Type the correct word (overwrites selection)
-        actions.append(TypeText(text=correct_word))
-
-        # 6. Jump to end
-        actions.append(ApplyFormatting(
-            format_type=FormatType.BOLD,
-            shortcut=("cmd", "down"),
-            description="Jump to end after autocorrect",
-        ))
-
-        # 7. Pause — resuming typing
-        actions.append(Pause(
-            duration=self._r(cfg.return_pause),
-            description="Resuming after autocorrect",
-        ))
-
-        return actions
+        """Return to a verified word and then the exact insertion endpoint."""
+        if known_text is None:
+            return []
+        matches = list(re.finditer(r"(?<!\w)" + re.escape(wrong_word) + r"(?!\w)", known_text))
+        if len(matches) != 1:
+            return []
+        edits = replace_known_span(known_text, wrong_word, correct_word)
+        if not edits:
+            return []
+        return [Pause(duration=self._r(self.profile.behaviors.autocorrect.notice_pause), description="Noticed a misspelled word"), *edits]
 
     # ------------------------------------------------------------------
     # Feature 13: Final proofreading pass
     # ------------------------------------------------------------------
 
     def _build_final_proofread(self, full_text: str) -> list[TypingAction]:
-        """Build a final proofreading pass over the entire document.
-
-        Scrolls through the text, makes fixes from behavioral_content.
-        Gated by probability and minimum text length.
-        """
+        """Apply only unique corrections in actual emitted text, then return."""
         cfg = self.profile.behaviors.final_proofread
-        if not cfg.enabled:
+        if not cfg.enabled or len(full_text) < cfg.min_text_length or self._rng.random() > cfg.probability:
             return []
-        if len(full_text) < cfg.min_text_length:
-            return []
-        if self._rng.random() > cfg.probability:
-            return []
-
-        fixes = self._behavioral_content.get("proofreading_fixes", [])
-        if not fixes:
-            return []
-
-        # Cap at max_fixes
-        fixes = fixes[:cfg.max_fixes]
-
-        actions: list[TypingAction] = []
-
-        # Pre-pass pause (finishing typing, deciding to review)
-        actions.append(Pause(
-            duration=self._r(cfg.pre_pass_pause),
-            description="Deciding to proofread",
-        ))
-
-        # Cmd+Up to jump to top of document
-        actions.append(ApplyFormatting(
-            format_type=FormatType.BOLD,
-            shortcut=("cmd", "up"),
-            description="Jump to top for proofreading",
-        ))
-
-        # Slow scroll through (simulate reading with Down arrow presses)
-        screens = max(1, len(full_text) // cfg.chars_per_screen)
-        for screen_idx in range(screens):
-            # Reading pause per screen
-            actions.append(Pause(
-                duration=self._r(cfg.reading_pause_per_screen),
-                description=f"Reading screen {screen_idx + 1}",
-            ))
-            # Press Down a few times to scroll
-            for _ in range(3):
-                actions.append(PressKey(key="down"))
-
-        # Now apply each fix
-        for fix in fixes:
-            original = fix.get("original", "")
-            fixed = fix.get("fixed", "")
-            position_fraction = fix.get("position_fraction", 0.5)
-
-            if not original or not fixed or original == fixed:
+        actions = []
+        applied = 0
+        for fix in self._behavioral_content.get("proofreading_fixes", []):
+            if applied >= cfg.max_fixes:
+                break
+            edits = replace_known_span(full_text, fix.get("original", ""), fix.get("fixed", ""))
+            if not edits:
                 continue
-
-            # Navigate to position: Cmd+Up, then word jumps
-            actions.append(ApplyFormatting(
-                format_type=FormatType.BOLD,
-                shortcut=("cmd", "up"),
-                description="Jump to top for fix",
-            ))
-
-            # Estimate word position from fraction
-            target_pos = int(len(full_text) * position_fraction)
-            words_to_jump = target_pos // 6  # rough word estimate
-
-            for _ in range(words_to_jump):
-                actions.append(ApplyFormatting(
-                    format_type=FormatType.BOLD,
-                    shortcut=("opt", "right"),
-                    description="Word jump to fix position",
-                ))
-
-            # Close reading pause
-            actions.append(Pause(
-                duration=self._r(cfg.close_reading_pause),
-                description="Close reading at fix position",
-            ))
-
-            # Found the issue
-            actions.append(Pause(
-                duration=self._r(cfg.found_issue_pause),
-                description="Found issue during proofreading",
-            ))
-
-            # Select the original text with Shift+Right
-            for _ in range(len(original)):
-                actions.append(ApplyFormatting(
-                    format_type=FormatType.BOLD,
-                    shortcut=("shift", "right"),
-                    description="Select text for fix",
-                ))
-
-            # Brief pause before fixing
-            actions.append(Pause(
-                duration=self._r(cfg.before_fix_pause),
-                description="About to fix",
-            ))
-
-            # Type the replacement
-            actions.append(TypeText(text=fixed))
-
-        # Jump back to end
-        actions.append(ApplyFormatting(
-            format_type=FormatType.BOLD,
-            shortcut=("cmd", "down"),
-            description="Jump to end after proofreading",
-        ))
-
+            actions.append(Pause(duration=self._r(cfg.found_issue_pause), description="Found issue during proofreading"))
+            actions.extend(edits)
+            full_text = PlannedText(full_text).apply(edits).text
+            applied += 1
         return actions
 
     # ------------------------------------------------------------------

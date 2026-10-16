@@ -10,22 +10,44 @@ from .models import AbandonWord, ApplyFormatting, MakeMistake, PressKey, Rewrite
 
 
 class PlannedText:
-    def __init__(self, text=""):
+    def __init__(self, text="", *, track_typos=False, max_typo_distance=None):
         self.text = text
         self.cursor = len(text)
         self.anchor = None
         self.valid = True
+        self.typos = []
+        self.track_typos = track_typos
+        self.max_typo_distance = max_typo_distance
 
     def _insert(self, text):
         start, end = sorted((self.cursor, self.anchor if self.anchor is not None else self.cursor))
+        self._replace(start, end, text)
+
+    def _replace(self, start, end, text):
+        delta = len(text) - (end - start)
+        self.typos = [(wrong, correct, pos if pos + len(wrong) <= start else pos + delta)
+                      for wrong, correct, pos in self.typos
+                      if pos + len(wrong) <= start or pos >= end]
         self.text = self.text[:start] + text + self.text[end:]
         self.cursor = start + len(text)
         self.anchor = None
+        if self.max_typo_distance is not None:
+            self.typos = [entry for entry in self.typos if len(self.text) - entry[2] <= self.max_typo_distance]
 
     def apply(self, actions):
+        if not self.valid:
+            return self
         for action in actions:
             if isinstance(action, TypeText):
-                self._insert(action.text)
+                # Empty TypeText emits no event and cannot replace a selection.
+                if action.text:
+                    start = min(self.cursor, self.anchor if self.anchor is not None else self.cursor)
+                    self._insert(action.text)
+                    marker = action.proofread_typo
+                    if self.track_typos and marker is not None:
+                        wrong, correct, offset = marker
+                        if action.text[offset:offset + len(wrong)] == wrong:
+                            self.typos.append((wrong, correct, start + offset))
             elif isinstance(action, MakeMistake):
                 self._insert(action.correct_text)
             elif isinstance(action, AbandonWord):
@@ -34,8 +56,7 @@ class PlannedText:
                 if action.delete_count > self.cursor:
                     self.valid = False
                     return self
-                self.text = self.text[:self.cursor - action.delete_count] + self.text[self.cursor:]
-                self.cursor -= action.delete_count
+                self._replace(self.cursor - action.delete_count, self.cursor, "")
                 self.apply(action.new_actions)
             elif isinstance(action, PressKey):
                 if action.key in ("left", "right"):
@@ -48,8 +69,7 @@ class PlannedText:
                     if self.anchor is not None:
                         self._insert("")
                     elif self.cursor:
-                        self.text = self.text[:self.cursor - 1] + self.text[self.cursor:]
-                        self.cursor -= 1
+                        self._replace(self.cursor - 1, self.cursor, "")
                     else:
                         self.valid = False
                         return self

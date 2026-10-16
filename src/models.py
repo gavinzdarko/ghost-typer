@@ -511,6 +511,8 @@ class TypeText(TypingAction):
 
     text: str = ""
     speed_multiplier: float = 1.0  # <1 is slower; >1 is faster
+    # Planner-only anchor: wrong text, correction, offset within this action.
+    proofread_typo: tuple[str, str, int] | None = None
 
     def __post_init__(self):
         if not math.isfinite(self.speed_multiplier) or self.speed_multiplier <= 0:
