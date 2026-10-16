@@ -21,7 +21,7 @@ def test_explicit_key_reaches_human_errors_and_empty_key_suppresses_environment(
     with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'environment'}), patch('anthropic.Anthropic', return_value=Mock()) as client:
         planner = TypingPlanner(api_key='configured-key')
         assert planner._human_errors.is_enabled
-        client.assert_called_once_with(api_key='configured-key')
+        client.assert_called_once_with(api_key='configured-key', max_retries=0)
         client.reset_mock()
         assert not TypingPlanner(api_key='')._human_errors.is_enabled
         assert not AIPlanner(api_key='').is_enabled
