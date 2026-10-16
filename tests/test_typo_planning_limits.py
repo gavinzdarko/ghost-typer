@@ -1,8 +1,8 @@
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
-from src.models import Settings, TextSegment
+from src.models import MakeMistake, Rewrite, Settings, TextSegment, TypeText
 from src.planned_text import PlannedText
 from src.typing_engine import TypingEngine
 from src.typing_planner import TypingPlanner
@@ -33,3 +33,40 @@ def test_correction_notice_delay_respects_zero_or_reversed_limits(minimum, maxim
     for _ in range(30):
         delay = engine.chars_before_noticing_mistake()
         assert 0 <= delay <= maximum
+
+
+@pytest.mark.parametrize('text', ['abc cafe\u0301 end', 'abc family 👪 end',
+                                  'abc family 👨‍👩‍👧 end'])
+def test_unicode_chunks_skip_forced_transient_typos_and_false_alarms(text):
+    planner = TypingPlanner(Settings(error_rate=1, grammar_error_rate=0,
+                                     punctuation_error_rate=0, false_alarm_rate=1,
+                                     rewrite_base_probability=0, rewrite_max_probability=0), ai_enabled=False)
+    planner._pick_mistake_positions = Mock(return_value={0})
+    planner.engine.generate_typo = Mock(return_value='z')
+    planner.engine.should_false_alarm = Mock(return_value=True)
+    plan = planner.plan([TextSegment(text)])
+    assert PlannedText().apply(plan.actions).text == text
+    assert not any(isinstance(action, (Rewrite, MakeMistake)) for action in plan.actions)
+    planner._pick_mistake_positions.assert_not_called()
+    planner.engine.should_false_alarm.assert_not_called()
+
+
+def test_simple_unicode_typing_only_corrects_immediate_ascii_characters():
+    planner = TypingPlanner(Settings(error_rate=1), ai_enabled=False)
+    planner.engine.generate_typo = Mock(side_effect=lambda char: char.swapcase())
+    plan = planner.plan([TextSegment('É ß a')], simple=True)
+    assert PlannedText().apply(plan.actions).text == 'É ß a'
+    assert planner.engine.generate_typo.call_args_list == [call('a')]
+    rewrites = [action for action in plan.actions if isinstance(action, Rewrite)]
+    assert len(rewrites) == 1
+    assert rewrites[0].new_actions == [TypeText(text='a')]
+
+
+def test_ascii_chunks_retain_false_alarm_corrections():
+    planner = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0,
+                                     punctuation_error_rate=0, false_alarm_rate=1,
+                                     rewrite_base_probability=0, rewrite_max_probability=0), ai_enabled=False)
+    planner.engine.should_false_alarm = lambda: True
+    actions = planner.plan([TextSegment('ordinary ASCII text')]).actions
+    assert any(isinstance(action, Rewrite) for action in actions)
+    assert PlannedText().apply(actions).text == 'ordinary ASCII text'
