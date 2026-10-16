@@ -92,6 +92,7 @@ class Orchestrator:
         # Typing state
         self._state = OrchestratorState.IDLE
         self._state_lock = threading.Lock()
+        self._session_lock = threading.RLock()
         self._typing_thread: Optional[threading.Thread] = None
         self._cancel_event = threading.Event()
         self._simulator: Optional[KeystrokeSimulator] = None
@@ -191,22 +192,26 @@ class Orchestrator:
                       Set to False when calling from the main/GUI thread
                       to avoid blocking the AppKit event loop.
         """
-        if self.state in (OrchestratorState.TYPING, OrchestratorState.PAUSED, OrchestratorState.PLANNING):
+        with self._session_lock:
+            if self.state == OrchestratorState.IDLE and not (
+                self._typing_thread and self._typing_thread.is_alive()
+            ):
+                return
             self._cancel_event.set()
             sim = self._simulator
-            if sim:
-                sim.resume()  # unblock if paused so thread can exit
-                sim.stop()    # blocks until any in-flight CGEvent call finishes
-            if blocking and self._typing_thread:
-                self._typing_thread.join(timeout=5.0)
+            worker = self._typing_thread
+        if sim:
+            sim.resume()
+            sim.stop()
+        if blocking and worker and worker is not threading.current_thread() and worker.ident is not None:
+            worker.join(timeout=5.0)
+        with self._session_lock:
+            # A timed-out worker still owns its cancellation event and session.
+            # Never advertise IDLE or allow a new launch to clear its event.
+            if blocking and (not worker or not worker.is_alive()) and self._typing_thread is worker:
                 self._typing_thread = None
-            # Only force IDLE when blocking (thread is dead). When non-blocking,
-            # let the thread's finally block set IDLE to avoid two concurrent
-            # typing threads (new clipboard event sees IDLE, starts new thread
-            # while old one is still winding down).
-            if blocking:
                 self.state = OrchestratorState.IDLE
-            self.notification_service.notify_cancelled()
+        self.notification_service.notify_cancelled()
 
     # ------------------------------------------------------------------
     # Table fill mode
@@ -309,33 +314,7 @@ class Orchestrator:
         self._table_fill_mode = False
         self.clipboard_monitor._immediate_mode = False
 
-        with self._state_lock:
-            if self._state != OrchestratorState.IDLE:
-                logger.info("Can't run table fill — currently %s", self._state.name)
-                return
-            self._state = OrchestratorState.PLANNING
-
-        self._cancel_event.clear()
-        logger.info("Running table fill with %d items", len(items))
-
-        cb = self.on_state_change
-        if cb:
-            try:
-                cb(OrchestratorState.PLANNING)
-            except Exception:
-                logger.exception("Error in state change callback")
-
-        try:
-            self._typing_thread = threading.Thread(
-                target=self._table_fill_pipeline,
-                args=(items, skip_columns),
-                daemon=True,
-                name="TableFillPipeline",
-            )
-            self._typing_thread.start()
-        except Exception:
-            logger.exception("Failed to start table fill thread")
-            self.state = OrchestratorState.IDLE
+        self._launch_pipeline(self._table_fill_pipeline, (items, skip_columns), "TableFillPipeline")
 
     _CLIPBOARD_SENTINEL = "\x00__GHOST_TYPER_EMPTY__"
 
@@ -511,47 +490,33 @@ class Orchestrator:
             self._add_to_table_queue(content)
             return
 
-        # Wait for any previous thread to finish before starting a new one
-        old_thread = self._typing_thread
-        if old_thread and old_thread.is_alive():
-            old_thread.join(timeout=5.0)
+        self._launch_pipeline(self._typing_pipeline, (content,), "TypingPipeline")
 
-        # If cancel was requested, the thread may still be winding down.
-        # Wait outside the lock to avoid unsafe release/acquire.
-        if self._cancel_event.is_set() and old_thread and old_thread.is_alive():
-            old_thread.join(timeout=3.0)
-
-        with self._state_lock:
-            if self._state != OrchestratorState.IDLE:
-                logger.info("Ignoring clipboard change — currently %s", self._state.name)
-                return
-            self._state = OrchestratorState.PLANNING
-        # Clear cancel event before starting new pipeline
-        self._cancel_event.clear()
-
-        logger.info("Processing clipboard content: %s", content)
-        cb = self.on_state_change  # snapshot
-        if cb:
+    def _launch_pipeline(self, target, args: tuple, name: str) -> bool:
+        """Reserve a session atomically; a live previous worker retains ownership."""
+        with self._session_lock:
+            worker = self._typing_thread
+            if (worker and worker.is_alive()) or self.state != OrchestratorState.IDLE:
+                logger.info("Ignoring launch while a previous session is active")
+                return False
+            self.state = OrchestratorState.PLANNING
+            self._cancel_event.clear()
             try:
-                cb(OrchestratorState.PLANNING)
+                worker = threading.Thread(target=target, args=args, daemon=True, name=name)
+                self._typing_thread = worker
+                worker.start()
             except Exception:
-                logger.exception("Error in state change callback")
-
-        try:
-            self._typing_thread = threading.Thread(
-                target=self._typing_pipeline,
-                args=(content,),
-                daemon=True,
-                name="TypingPipeline",
-            )
-            self._typing_thread.start()
-        except Exception:
-            logger.exception("Failed to start typing thread")
-            self.state = OrchestratorState.IDLE
+                logger.exception("Failed to start typing thread")
+                self._typing_thread = None
+                self.state = OrchestratorState.IDLE
+                return False
+            return True
 
     def _typing_pipeline(self, content: ClipboardContent) -> None:
         """Run the full AI-powered typing pipeline in a background thread."""
         try:
+            if self._cancel_event.is_set():
+                return
             # State already set to PLANNING in _on_clipboard_change
             self.notification_service.notify_planning()
 
