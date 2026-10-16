@@ -91,6 +91,7 @@ class Orchestrator:
 
         # Typing state
         self._state = OrchestratorState.IDLE
+        self._state_revision = 0
         self._state_lock = threading.Lock()
         self._session_lock = threading.RLock()
         self._typing_thread: Optional[threading.Thread] = None
@@ -129,11 +130,24 @@ class Orchestrator:
         with self._state_lock:
             return self._state
 
+    @property
+    def state_snapshot(self) -> tuple[OrchestratorState, int]:
+        """Identify a transition even when a later session reuses its state."""
+        with self._state_lock:
+            return self._state, self._state_revision
+
     @state.setter
     def state(self, new_state: OrchestratorState) -> None:
+        self._set_state(new_state)
+
+    def _set_state(self, new_state: OrchestratorState, *, expected: OrchestratorState | None = None) -> bool:
+        """Transition atomically, optionally only from an expected state."""
         with self._state_lock:
             old = self._state
+            if expected is not None and old != expected:
+                return False
             self._state = new_state
+            self._state_revision += 1
         logger.info("State: %s -> %s", old.name, new_state.name)
         cb = self.on_state_change  # snapshot to avoid TOCTOU
         if cb:
@@ -141,6 +155,7 @@ class Orchestrator:
                 cb(new_state)
             except Exception:
                 logger.exception("Error in state change callback")
+        return True
 
     def start(self) -> None:
         """Start the orchestrator and clipboard monitor."""
@@ -172,22 +187,31 @@ class Orchestrator:
         return self.clipboard_monitor.enabled
 
     def pause(self) -> None:
-        """Pause the current typing session."""
-        if self.state == OrchestratorState.TYPING:
-            sim = self._simulator  # snapshot to avoid TOCTOU
-            if sim:
-                sim.pause()
-            self.state = OrchestratorState.PAUSED
-            self.notification_service.notify_paused()
+        """Pause the current typing session without reviving a finished worker."""
+        with self._session_lock:
+            if self.state != OrchestratorState.TYPING:
+                return
+            sim = self._simulator
+            if sim is None:
+                return
+            sim.pause()
+            if self._set_state(OrchestratorState.PAUSED, expected=OrchestratorState.TYPING):
+                self.notification_service.notify_paused()
+            else:
+                # Completion may have won while the simulator was pausing.
+                sim.resume()
 
     def resume(self) -> None:
-        """Resume a paused typing session."""
-        if self.state == OrchestratorState.PAUSED:
-            sim = self._simulator  # snapshot to avoid TOCTOU
-            if sim:
-                sim.resume()
-            self.state = OrchestratorState.TYPING
-            self.notification_service.notify_resumed()
+        """Resume only a session that still owns its paused simulator."""
+        with self._session_lock:
+            if self.state != OrchestratorState.PAUSED:
+                return
+            sim = self._simulator
+            if sim is None:
+                return
+            sim.resume()
+            if self._set_state(OrchestratorState.TYPING, expected=OrchestratorState.PAUSED):
+                self.notification_service.notify_resumed()
 
     def cancel(self, blocking: bool = True) -> None:
         """Cancel the current typing session.
