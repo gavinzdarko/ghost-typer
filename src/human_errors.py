@@ -199,6 +199,7 @@ class HumanErrors:
             pos = m.get("position", -1)
             if (isinstance(wrong, str) and isinstance(correct, str)
                     and wrong and correct and len(wrong) <= 100 and len(correct) <= 100
+                    and wrong.isascii() and wrong.isprintable()
                     and not any(c.isspace() for c in wrong + correct)
                     and isinstance(pos, int) and not isinstance(pos, bool) and pos >= 0):
                 # Validate the position — the correct word should be at that position
