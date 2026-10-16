@@ -34,7 +34,7 @@ class TextParser:
         Returns:
             A list of TextSegment objects with formatting metadata.
         """
-        if not content or not content.strip():
+        if not content:
             return []
 
         if is_html:
@@ -59,30 +59,18 @@ class TextParser:
 
     def _parse_plain_text(self, text: str) -> list[TextSegment]:
         """Parse plain text preserving paragraph structure."""
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         # Strip citation markers like [1][2][3]
         text = self._CITATION_RE.sub("", text)
 
         segments: list[TextSegment] = []
-        paragraphs = re.split(r"\n\s*\n", text)
-
-        for i, para in enumerate(paragraphs):
-            # Keep leading indentation: plain-text clipboard content may be
-            # code or another indentation-sensitive format.
-            para = para.rstrip()
-            if not para.strip():
+        for part in re.split(r"(\n+)", text):
+            if not part:
                 continue
-
-            lines = para.split("\n")
-            for j, line in enumerate(lines):
-                line = line.rstrip()
-                if not line.strip():
-                    continue
-                segments.append(TextSegment(text=line, formatting={}))
-                if j < len(lines) - 1:
-                    segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
-
-            if i < len(paragraphs) - 1:
-                segments.append(TextSegment(text="\n\n", formatting={"paragraph_break": True}))
+            fmt = {}
+            if part.startswith("\n"):
+                fmt = {"paragraph_break" if len(part) > 1 else "linebreak": True}
+            segments.append(TextSegment(text=part, formatting=fmt))
 
         return segments
 

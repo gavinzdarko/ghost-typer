@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .models import (
     AbandonWord,
@@ -146,6 +146,10 @@ class TypingPlanner:
             behavioral_content: AI-generated behavioral data (word speeds,
                     abandonments, distractions, etc.). Empty dict = no-op.
         """
+        # pynput treats both CR and LF as Enter; one CRLF must be one event.
+        if any("\r" in segment.text for segment in segments):
+            segments = [replace(segment, text=segment.text.replace("\r\n", "\n").replace("\r", "\n")) for segment in segments]
+
         actions: list[TypingAction] = []
         total_chars = 0
         total_paste_chars = sum(len(seg.text) for seg in segments)
@@ -233,6 +237,14 @@ class TypingPlanner:
         """Plan actions for a single TextSegment. Returns (actions, char_count)."""
         actions: list[TypingAction] = []
         char_count = 0
+
+        # Structural break segments must bypass sentence chunking, which
+        # intentionally ignores whitespace-only input.
+        if segment.text and not segment.text.strip() and "\n" in segment.text:
+            for char in segment.text:
+                actions.append(PressKey(key="enter") if char == "\n" else TypeText(text=char))
+            self._char_position += len(segment.text)
+            return actions, len(segment.text)
 
         # --- Skip all formatting — type as plain text so it inherits destination style ---
 
@@ -467,20 +479,22 @@ class TypingPlanner:
         chunks: list[_Chunk] = []
 
         # Split on paragraph boundaries (double newline or single newline)
-        paragraphs = re.split(r"\n\n+", text)
+        paragraphs = re.split(r"(\n+)", text)
 
         char_pos = 0  # track position within text for thought boundary lookup
         for p_idx, para in enumerate(paragraphs):
-            is_last_para = p_idx == len(paragraphs) - 1
-            if not para.strip():
-                char_pos += len(para) + 2  # account for \n\n
+            if para and not para.strip() and "\n" in para:
+                chunks.append(_Chunk(text=para, is_paragraph_end=True))
+                char_pos += len(para)
+                continue
+            if not para:
                 continue
 
             # Split paragraph into sentences
             sentences = SENTENCE_RE.split(para)
 
             for s_idx, sentence in enumerate(sentences):
-                if not sentence.strip():
+                if not sentence:
                     continue
 
                 is_last_sentence = s_idx == len(sentences) - 1
@@ -504,11 +518,6 @@ class TypingPlanner:
                     ))
 
                 char_pos = text.find(sentence, char_pos) + len(sentence)
-
-            # Add paragraph break (newline) unless it's the last paragraph
-            if not is_last_para:
-                chunks.append(_Chunk(text="\n", is_paragraph_end=True))
-                char_pos += 2  # \n\n
 
         return chunks
 
@@ -547,9 +556,9 @@ class TypingPlanner:
             actions.append(Pause(duration=duration, description="Gathering thoughts before new idea"))
 
         # Special case: newline
-        if text == "\n":
-            actions.append(PressKey(key="enter"))
-            char_count += 1
+        if text and not text.strip() and "\n" in text:
+            actions.extend(PressKey(key="enter") if char == "\n" else TypeText(text=char) for char in text)
+            char_count += len(text)
             actions.append(Pause(duration=self.engine.paragraph_pause_duration()))
             return actions, char_count, []
 
