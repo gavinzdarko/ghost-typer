@@ -309,12 +309,12 @@ def test_no_punctuation():
 # =====================================================================
 
 def test_empty_and_whitespace():
-    """Empty or whitespace-only text should produce no chunks."""
+    """Empty text has no chunks; whitespace must survive planning."""
     print("\n=== Test 8: Empty and whitespace ===")
 
     assert get_chunks("") == []
-    assert get_chunks("   ") == []
-    assert get_chunks("\n\n") == []
+    assert "".join(c.text for c in get_chunks("   ")) == "   "
+    assert "".join(c.text for c in get_chunks("\n\n")) == "\n\n"
     print("  All empty cases produce no chunks. Good.")
 
 
