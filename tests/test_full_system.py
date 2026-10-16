@@ -595,45 +595,12 @@ def test_build_revisit_structure():
 
     assert len(result) > 0, "Should generate revisit actions"
 
-    # Should contain:
-    # 1. Pause (re-reading)
-    # 2. ApplyFormatting with cmd+up (jump to start)
-    # 3. Navigation (opt+right word jumps and/or arrow rights)
-    # 4. ApplyFormatting with shift+right (selection)
-    # 5. TypeText (replacement)
-    # 6. ApplyFormatting with cmd+down (jump back to end)
-
-    action_types = [type(a).__name__ for a in result]
-    assert "Pause" in action_types, "Should have pause actions"
-    assert "TypeText" in action_types, "Should have TypeText for replacement"
-    assert "ApplyFormatting" in action_types, "Should have navigation hotkeys"
-
-    # Check for cmd+up (jump to start)
-    nav_up = [a for a in result if isinstance(a, ApplyFormatting)
-              and a.shortcut == ("cmd", "up")]
-    assert len(nav_up) >= 1, "Should have cmd+up to jump to start"
-
-    # Check for cmd+down (jump back to end)
-    nav_down = [a for a in result if isinstance(a, ApplyFormatting)
-                and a.shortcut == ("cmd", "down")]
-    assert len(nav_down) >= 1, "Should have cmd+down to jump back"
-
-    # Check for shift+right (selection)
-    selections = [a for a in result if isinstance(a, ApplyFormatting)
-                  and a.shortcut == ("shift", "right")]
-    assert len(selections) == len("target phrase here"), (
-        f"Should have {len('target phrase here')} shift+right selections, "
-        f"got {len(selections)}"
-    )
-
-    # Check the replacement text
-    typed_actions = [a for a in result if isinstance(a, TypeText)]
-    assert any("revised" in a.text for a in typed_actions), (
-        "Should type the revised text"
-    )
-
-    print(f"  PASS: Revisit structure correct: {len(result)} actions, "
-          f"nav_up={len(nav_up)}, selections={len(selections)}, nav_down={len(nav_down)}")
+    from src.planned_text import PlannedText
+    state = PlannedText("existing prefix " + typed).apply(result)
+    assert state.valid
+    assert state.text == "existing prefix " + typed.replace("target phrase here", "revised phrase")
+    assert state.cursor == len(state.text)
+    assert not any(isinstance(a, ApplyFormatting) and a.shortcut[0] in ("cmd", "opt") for a in result)
 
 
 # =====================================================================
@@ -1196,23 +1163,10 @@ def test_final_proofread_pass():
     profile.behaviors.final_proofread.probability = 1.0
     planner.profile = profile
     plan = planner.plan([TextSegment(text=text)], behavioral_content=behavioral)
-    actions = plan.actions
-    proofread_start = None
-    for idx, a in enumerate(actions):
-        if isinstance(a, ApplyFormatting) and "proofreading" in (a.description or ""):
-            proofread_start = idx
-            break
-    assert proofread_start is not None, "Expected proofreading actions in plan"
-    remaining = actions[proofread_start:]
-    selections = [a for a in remaining if isinstance(a, ApplyFormatting)
-                  and a.shortcut == ("shift", "right")]
-    fix_texts = [a for a in remaining if isinstance(a, TypeText)]
-    assert len(selections) == len("there paper"), (
-        f"Expected {len('there paper')} shift+right selections, got {len(selections)}"
-    )
-    assert any("their paper" in a.text for a in fix_texts), "Expected fix text 'their paper'"
-    print(f"  PASS: proofreading_fixes appends proofread: "
-          f"{len(selections)} selections, fix text found")
+    # The AI invented an error absent from this input: it must not select
+    # unrelated text at its approximate position_fraction.
+    assert "there paper" not in text
+    assert not any(isinstance(a, TypeText) and "their paper" in a.text for a in plan.actions)
 
 
 def test_no_behavioral_content_no_crash():
