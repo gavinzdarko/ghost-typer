@@ -109,7 +109,7 @@ class Orchestrator:
         # Table fill mode
         self._table_fill_mode = False
         self._table_queue: list[ClipboardContent] = []
-        self._table_queue_lock = threading.Lock()
+        self._table_queue_lock = threading.RLock()
         self.on_table_queue_change: Optional[callable] = None  # (count)
 
         # Callbacks for UI updates
@@ -296,25 +296,31 @@ class Orchestrator:
             except Exception:
                 logger.exception("Error in table queue change callback")
 
-    def run_table_fill(self, skip_columns: int = 1) -> None:
+    def run_table_fill(self, skip_columns: int = 1) -> bool:
         """Execute all queued table items — type each one, TAB between them.
 
         Args:
             skip_columns: Number of pre-filled columns to skip at the start
                           of each new row (e.g. 1 if column A has labels).
         """
-        with self._table_queue_lock:
-            items = list(self._table_queue)
-            self._table_queue.clear()
-
-        if not items:
-            logger.warning("Table fill: nothing in queue")
-            return
-
-        self._table_fill_mode = False
-        self.clipboard_monitor._immediate_mode = False
-
-        self._launch_pipeline(self._table_fill_pipeline, (items, skip_columns), "TableFillPipeline")
+        with self._session_lock:
+            worker = self._typing_thread
+            if self.state != OrchestratorState.IDLE or (worker and worker.is_alive()):
+                logger.info("Can't run table fill while a session is active")
+                return False
+            with self._table_queue_lock:
+                items = list(self._table_queue)
+                if not items:
+                    logger.warning("Table fill: nothing in queue")
+                    return False
+                # Keep the queue and mode intact unless the worker actually starts.
+                if not self._launch_pipeline(self._table_fill_pipeline, (items, skip_columns), "TableFillPipeline"):
+                    return False
+                self._table_queue.clear()
+                self._table_fill_mode = False
+                self.clipboard_monitor._immediate_mode = False
+        self._notify_table_queue_change(0)
+        return True
 
     _CLIPBOARD_SENTINEL = "\x00__GHOST_TYPER_EMPTY__"
 
@@ -364,6 +370,8 @@ class Orchestrator:
 
     def _table_fill_pipeline(self, items: list[ClipboardContent], skip_columns: int = 1) -> None:
         """Type each queued item with TAB between them, auto-skipping filled cells."""
+        consumed_items = 0
+        incomplete = False
         try:
             # ── Separate items into cells and row breaks ──
             cell_items: list[ClipboardContent | None] = []  # None = row break
@@ -391,7 +399,7 @@ class Orchestrator:
             engine = TypingEngine(self._settings, profile=self._profile)
 
             # Build a queue of items to type (skip row breaks for now)
-            type_queue = [e for e in cell_items if e is not None]
+            type_queue = [(item, index) for index, item in enumerate(items) if item.text != _ROW_BREAK]
             queue_index = 0
             is_first_cell = True
             max_cells = len(type_queue) + 20  # safety limit to avoid infinite loop
@@ -419,8 +427,7 @@ class Orchestrator:
                     continue
 
                 # Cell is empty — type the next queued item into it
-                entry = type_queue[queue_index]
-                queue_index += 1
+                entry, original_index = type_queue[queue_index]
 
                 segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
                 if segments and segments[0].text.strip():
@@ -429,16 +436,30 @@ class Orchestrator:
                     self._total_chars = self._count_typed_chars(cell_plan.actions)
                     self._chars_typed = 0
                     self._execute_plan(cell_plan, engine, simulator)
+                    if self._cancel_event.is_set() or not simulator.is_active:
+                        return
 
                     total_word_count += sum(
                         len(seg.text.split()) for seg in segments if seg.text.strip()
                     )
+                else:
+                    raise ValueError("Table item did not contain typable text")
+                queue_index += 1
+                consumed_items = original_index + 1
                 cell_count += 1
 
             if self._cancel_event.is_set():
                 logger.info("Table fill cancelled")
                 return
 
+            if queue_index < len(type_queue):
+                incomplete = True
+                self.notification_service.notify_error(
+                    "Table fill stopped at its cell safety limit; remaining items are queued."
+                )
+                return
+
+            consumed_items = len(items)
             self._current_word_count = total_word_count
             elapsed = time.time() - self._typing_start_time
             self.notification_service.notify_complete(self._current_word_count, elapsed)
@@ -452,7 +473,14 @@ class Orchestrator:
             self.notification_service.notify_error(str(e))
         finally:
             self._simulator = None
-            self._notify_table_queue_change(0)
+            remaining = items[consumed_items:]
+            with self._table_queue_lock:
+                # Prepend unfinished work ahead of any newly queued cells.
+                self._table_queue[0:0] = remaining
+                count = sum(item.text != _ROW_BREAK for item in self._table_queue)
+            self._notify_table_queue_change(count)
+            if remaining and not incomplete:
+                logger.warning("Table fill incomplete: %d items remain; the current cell may be partially typed", count)
             if self.state != OrchestratorState.IDLE:
                 self.state = OrchestratorState.IDLE
 

@@ -309,9 +309,9 @@ class GhostTyperApp(rumps.App):
         if count == 0:
             return
 
-        self._table_fill_item.state = 0
-        self._table_run_item.title = "Run Table (0 items)"
-        self.orchestrator.run_table_fill(skip_columns=1)
+        if self.orchestrator.run_table_fill(skip_columns=1):
+            self._table_fill_item.state = 0
+            self._table_run_item.title = "Run Table (0 items)"
 
     def _on_table_queue_change(self, count: int) -> None:
         """Update menu when table queue changes."""
