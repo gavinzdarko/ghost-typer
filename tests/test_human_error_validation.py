@@ -32,3 +32,28 @@ def test_sparse_edits_survive_and_invalid_misspelling_records_are_ignored():
     result = process(text, {'modified_text': modified, 'misspellings': [None, {'position': 'bad'},
                            {'wrong': 'teh', 'correct': 'the', 'position': 0}]})
     assert result == (modified, [('teh', 'The', 0)])
+
+
+@pytest.mark.parametrize("removed", [" Critical warning.", " A.", " Do not share the private data with anybody"])
+def test_similar_paragraph_cannot_hide_a_deleted_sentence_or_long_passage(removed):
+    prefix = "The rest of this paragraph stays exactly as written. " * 12
+    text = prefix + removed
+    assert process(text, {"modified_text": prefix}) == (text, [])
+
+
+def test_small_edit_in_long_repeated_line_only_compares_changed_window():
+    from unittest.mock import patch
+    from difflib import SequenceMatcher
+
+    text = "ab" * 4000
+    modified = text[:4000] + "ac" + text[4002:]
+    with patch("src.human_errors.SequenceMatcher", wraps=SequenceMatcher) as matcher:
+        assert process(text, {"modified_text": modified}) == (modified, [])
+    assert matcher.call_args.kwargs["autojunk"] is True
+    assert max(len(arg) for arg in matcher.call_args.args[1:]) <= 1
+
+
+def test_multiple_sparse_grammar_and_punctuation_edits_remain_accepted():
+    text = "The student does not know, because they are tired and could have studied."
+    modified = text.replace("does not", "dont").replace(",", "").replace("could have", "could of")
+    assert process(text, {"modified_text": modified}) == (modified, [])
