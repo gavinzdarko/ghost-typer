@@ -41,7 +41,7 @@ class VisualVerifier:
     """Verifies typed output by screenshotting and OCR-ing the result."""
 
     def __init__(self, enabled: bool = True):
-        self.enabled = enabled and (HAS_TESSERACT or HAS_OPENCV)
+        self.enabled = bool(enabled)
         if self.enabled:
             logger.info("Visual verifier initialized (OCR: %s, CV: %s)", HAS_TESSERACT, HAS_OPENCV)
         else:
@@ -94,18 +94,15 @@ class VisualVerifier:
             return None
 
         try:
-            image = Image.open(image_path)
-
-            # Preprocess if OpenCV is available
-            if HAS_OPENCV:
-                img_array = np.array(image)
-                # Convert to grayscale
-                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                # Apply threshold to improve OCR accuracy
-                _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                image = Image.fromarray(thresh)
-
-            text = pytesseract.image_to_string(image)
+            with Image.open(image_path) as source:
+                if HAS_OPENCV:
+                    img_array = np.array(source.convert("RGB"))
+                    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+                    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    with Image.fromarray(thresh) as processed:
+                        text = pytesseract.image_to_string(processed, timeout=10)
+                else:
+                    text = pytesseract.image_to_string(source, timeout=10)
             logger.info("OCR extracted %d characters", len(text))
             return text.strip()
         except Exception:
@@ -133,6 +130,12 @@ class VisualVerifier:
                 success=True,
                 match_ratio=1.0,
                 message="Verification skipped (disabled)",
+            )
+
+        if not HAS_TESSERACT:
+            return VerificationResult(
+                success=False, match_ratio=0.0,
+                message="OCR verification unavailable: install Tesseract and the verification extras",
             )
 
         time.sleep(delay_before_capture)
