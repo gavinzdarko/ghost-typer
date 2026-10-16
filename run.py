@@ -69,13 +69,17 @@ def _check_single_instance() -> None:
     # Open (or create) the lock file — keep it open for the lifetime of the process
     global _lock_fh  # noqa: PLW0603
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _lock_fh = open(LOCK_FILE, "w")
+    _lock_fh = open(LOCK_FILE, "a+")
     try:
         fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fh.seek(0)
+        _lock_fh.truncate()
         _lock_fh.write(str(os.getpid()))
         _lock_fh.flush()
         _lock_fh.truncate()
     except OSError:
+        _lock_fh.close()
+        _lock_fh = None
         print("Ghost Typer is already running. Exiting.", file=sys.stderr)
         sys.exit(1)
 
