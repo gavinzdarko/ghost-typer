@@ -89,11 +89,11 @@ Rules:
 class AIPlanner:
     """Uses Claude to generate intelligent, realistic typing plans."""
 
-    def __init__(self, settings: Settings | None = None, api_key: str | None = None):
+    def __init__(self, settings: Settings | None = None, api_key: str | None = None, *, enabled: bool = True):
         self.settings = settings or Settings()
-        self._api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self._api_key = (api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")) if enabled else None
         self._client: Optional[anthropic.Anthropic] = None
-        self._fallback_planner = TypingPlanner(self.settings)
+        self._fallback_planner = TypingPlanner(self.settings, ai_enabled=enabled, api_key=api_key)
         self._enabled = bool(self._api_key)
 
         if self._api_key:
@@ -112,7 +112,7 @@ class AIPlanner:
 
     def update_settings(self, settings: Settings) -> None:
         self.settings = settings
-        self._fallback_planner = TypingPlanner(settings)
+        self._fallback_planner = TypingPlanner(settings, ai_enabled=self._enabled, api_key=self._api_key)
 
     def plan(self, segments: list[TextSegment]) -> TypingPlan:
         """Generate a typing plan using Claude AI, falling back to rule-based if needed."""
@@ -489,8 +489,8 @@ class AIRewriter:
     """Uses Claude to generate plausible 'first draft' versions of text
     that a human might type before deleting and rewriting better."""
 
-    def __init__(self, api_key: str | None = None):
-        self._api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+    def __init__(self, api_key: str | None = None, *, enabled: bool = True):
+        self._api_key = (api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")) if enabled else None
         self._client: Optional[anthropic.Anthropic] = None
         self._enabled = bool(self._api_key)
         self._cache: dict[str, str] = {}  # final_text -> draft_text
@@ -967,12 +967,12 @@ Mark 2-5 zones. start/end are char offsets. Most essay text is "composition".
 class AIProfileGenerator:
     """Generates unique TypingProfile per session via Claude Haiku."""
 
-    def __init__(self, settings: Settings | None = None, api_key: str | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, api_key: str | None = None, *, enabled: bool = True) -> None:
         self.settings = settings or Settings()
         self._client: anthropic.Anthropic | None = None
         self._enabled = False
 
-        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        resolved_key = (api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")) if enabled else None
         if resolved_key:
             try:
                 self._client = anthropic.Anthropic(api_key=resolved_key)

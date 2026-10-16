@@ -96,7 +96,7 @@ class TypingPlanner:
     MAX_DRAFT_REQUESTS_PER_PLAN = 8
     MAX_REVISIT_REQUESTS_PER_PLAN = 5
 
-    def __init__(self, settings: Settings | None = None, ai_rewriter=None, profile: TypingProfile | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, ai_rewriter=None, profile: TypingProfile | None = None, *, ai_enabled: bool = True, api_key: str | None = None) -> None:
         self.settings = settings or Settings()
         self._profile = profile or TypingProfile.defaults()
         self.engine = TypingEngine(self.settings, profile=self._profile)
@@ -106,6 +106,7 @@ class TypingPlanner:
         self._draft_requests = 0
         self._thought_boundaries: set[int] = set()  # char positions of thought boundaries
         self._human_errors = HumanErrors(
+            enabled=ai_enabled, api_key=api_key,
             misspelling_rate=self.settings.error_rate,
             grammar_error_rate=getattr(self.settings, 'grammar_error_rate', 0.15),
             punctuation_error_rate=getattr(self.settings, 'punctuation_error_rate', 0.2),
