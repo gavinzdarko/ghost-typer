@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Optional
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, Declaration, Doctype, NavigableString, ProcessingInstruction, Tag
 
 from .models import TextSegment
 
@@ -118,6 +118,8 @@ class TextParser:
         list_counter: Optional[list[int]],
     ) -> None:
         """Recursively walk the DOM tree building TextSegments."""
+        if isinstance(node, (Comment, Declaration, Doctype, ProcessingInstruction)):
+            return
         if isinstance(node, NavigableString):
             text = str(node)
             # Collapse whitespace first (handles "\n  " from prettified HTML)
