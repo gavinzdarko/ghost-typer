@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -415,28 +415,95 @@ class TypingProfile:
 
 
 def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
-    """Recursively apply a dict onto a dataclass, handling nested dataclasses."""
+    """Accept only well-typed, bounded profile values from untrusted AI JSON."""
     if not isinstance(data, dict):
         return
-    for key, value in data.items():
-        if not hasattr(obj, key):
+    for spec in fields(obj):
+        key = spec.name
+        if key not in data:
             continue
+        value = data[key]
         current = getattr(obj, key)
-        if isinstance(current, (Range, IntRange)) and isinstance(value, dict):
-            for k, v in value.items():
-                if hasattr(current, k):
-                    setattr(current, k, type(getattr(current, k))(v))
-        elif hasattr(current, '__dataclass_fields__') and isinstance(value, dict):
-            _apply_dict_to_dataclass(current, value)
-        elif isinstance(current, list) and isinstance(value, list):
-            setattr(obj, key, value)
+        if isinstance(current, (Range, IntRange)):
+            if not isinstance(value, dict):
+                continue
+            lo, hi = value.get("min", current.min), value.get("max", current.max)
+            integer = isinstance(current, IntRange)
+            floor = .05 if "multiplier" in key else 0
+            ceiling = 10 if "multiplier" in key else min(900, max(1, current.max * 3))
+            if (_profile_number(lo, integer=integer) and _profile_number(hi, integer=integer)
+                    and floor <= lo <= hi <= ceiling):
+                setattr(obj, key, type(current)(lo, hi))
+        elif is_dataclass(current):
+            if isinstance(value, dict):
+                _apply_dict_to_dataclass(current, value)
+        elif isinstance(current, bool):
+            if isinstance(value, bool):
+                setattr(obj, key, value)
+        elif isinstance(current, (int, float)):
+            if not _profile_number(value, integer=isinstance(current, int)):
+                continue
+            # Rates and probabilities must remain meaningful. Other positive
+            # parameters are capped to keep an accidental AI value bounded.
+            probability = (any(part in key for part in ("probability", "rate", "level", "familiarity", "density", "split"))
+                           or key in {"confidence_level", "energy_level", "difficulty_threshold"})
+            lower, upper = 0, (1 if probability else min(3600, max(1, abs(current) * 10)))
+            if "multiplier" in key:
+                lower, upper = .05, 10
+            elif "sigma" in key:
+                upper = 2
+            elif key.endswith("lognormal_mu"):
+                lower, upper = -5, 5
+            elif key == "delay_clamp_min":
+                upper = .5
+            elif key == "delay_clamp_max":
+                lower, upper = .05, 5
+            elif key == "warmup_slowdown":
+                upper = 2
+            strictly_positive = key in {"progress_report_frequency", "revisit_length_boost_divisor", "chars_per_screen"}
+            if lower <= value <= upper and (not strictly_positive or value > 0):
+                setattr(obj, key, value)
+        elif isinstance(current, str):
+            if isinstance(value, str):
+                setattr(obj, key, value[:2000])
+        elif isinstance(current, list):
+            if not isinstance(value, list) or len(value) > 1000:
+                continue
+            if key == "false_alarm_weights":
+                if (len(value) == 2 and all(_profile_number(v) and 0 <= v <= 10000 for v in value)
+                        and sum(value) > 0):
+                    setattr(obj, key, value)
+            elif key == "word_speed_map":
+                # This metadata is not consumed as timing input by the engine.
+                continue
+            elif all(isinstance(v, str) for v in value):
+                setattr(obj, key, value)
         elif isinstance(current, dict) and isinstance(value, dict):
-            current.update(value)
-        else:
-            try:
-                setattr(obj, key, type(current)(value) if not isinstance(value, type(current)) else value)
-            except (TypeError, ValueError):
-                pass
+            allowed = {k: v for k, v in value.items()
+                       if k in current and _profile_number(v) and 0 <= v <= 10000}
+            if key == "type_weights":
+                candidate = {**current, **allowed}
+                if sum(candidate.values()) > 0:
+                    setattr(obj, key, candidate)
+            else:
+                current.update({k: min(v, 1) for k, v in allowed.items()})
+    # Cross-field invariants consumed by randint() and delay clamping.
+    for low, high in (("delay_clamp_min", "delay_clamp_max"),
+                      ("thinking_pause_clamp_min", "thinking_pause_clamp_max"),
+                      ("min_words_back", "max_words_back")):
+        if hasattr(obj, low) and getattr(obj, low) > getattr(obj, high):
+            defaults = type(obj)()
+            setattr(obj, low, getattr(defaults, low))
+            setattr(obj, high, getattr(defaults, high))
+
+
+def _profile_number(value: Any, *, integer: bool = False) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value) and (not integer or isinstance(value, int))
+    except OverflowError:
+        return False
 
 
 # Avoid shadowing built-in max/min inside Range.clamp
