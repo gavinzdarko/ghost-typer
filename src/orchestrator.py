@@ -9,6 +9,7 @@ clipboard → parse → AI plan → type → verify → notify
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from enum import Enum, auto
@@ -76,8 +77,7 @@ class Orchestrator:
         )
 
         # AI components — use settings API key if available
-        from .settings_ui import get_api_key
-        _api_key = get_api_key() or None
+        _api_key = self._resolve_api_key(self._settings_dict)
         ai_enabled = self._settings_dict.get("ai_enabled", True)
         self.ai_planner = AIPlanner(self._settings, api_key=_api_key, enabled=ai_enabled)
         self.ai_rewriter = AIRewriter(api_key=_api_key, enabled=ai_enabled)
@@ -473,6 +473,11 @@ class Orchestrator:
             if self.state != OrchestratorState.IDLE:
                 self.state = OrchestratorState.IDLE
 
+    @staticmethod
+    def _resolve_api_key(settings_dict: dict) -> str:
+        """Use current UI settings before environment (including loaded .env)."""
+        return settings_dict.get("anthropic_api_key", "").strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip()
+
     def update_settings(self, settings_dict: dict) -> None:
         """Apply new settings from the UI."""
         self._settings_dict = settings_dict
@@ -484,17 +489,18 @@ class Orchestrator:
             webhook_url=settings_dict.get("webhook_url") or None,
             sound_enabled=settings_dict.get("sound_enabled", True),
         )
-        self.ai_planner.update_settings(self._settings)
         self.visual_verifier.enabled = settings_dict.get("verify_after_typing", False)
 
-        # Re-init AI components if API key changed
-        from .settings_ui import get_api_key
-        new_key = get_api_key() or None
-        if new_key:
-            self.ai_planner = AIPlanner(self._settings, api_key=new_key)
-            self.ai_rewriter = AIRewriter(api_key=new_key)
-            self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=new_key)
-            self.fallback_planner = TypingPlanner(self._settings, ai_rewriter=self.ai_rewriter)
+        # Rebuild every planning component even offline: rates and cleared keys
+        # must take effect without retaining a previous session's paid client.
+        ai_enabled = settings_dict.get("ai_enabled", True)
+        new_key = self._resolve_api_key(settings_dict)
+        self.ai_planner = AIPlanner(self._settings, api_key=new_key, enabled=ai_enabled)
+        self.ai_rewriter = AIRewriter(api_key=new_key, enabled=ai_enabled)
+        self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=new_key, enabled=ai_enabled)
+        self.fallback_planner = TypingPlanner(
+            self._settings, ai_rewriter=self.ai_rewriter, ai_enabled=ai_enabled, api_key=new_key,
+        )
 
         logger.info("Settings updated")
 
