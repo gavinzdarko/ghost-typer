@@ -238,6 +238,16 @@ class ClipboardMonitor:
         with self._clipboard_lock:
             if not self._enabled or self._suspensions:
                 return
+            # Cmd+V can arrive before the next polling interval after a new
+            # copy. Only the empty revision we wrote belongs to this stage;
+            # the destination may already be pasting the newer clipboard.
+            if (self._owned_empty_revision is not None
+                    and self._get_change_count() != self._owned_empty_revision):
+                self._saved_clipboard_items = None
+                self._owned_empty_revision = None
+                with self._staged_lock:
+                    self._staged_content = None
+                return
             with self._staged_lock:
                 content = self._staged_content
                 self._staged_content = None

@@ -54,3 +54,32 @@ def test_nontext_copy_supersedes_old_staged_text():
         pb.clearContents()
         monitor._capture_change()
     assert monitor._staged_content is None
+
+
+def test_paste_before_poll_never_launches_an_older_staged_copy():
+    pb = Pasteboard()
+    callback = Mock(return_value=True)
+    monitor = ClipboardMonitor(callback)
+    with pasteboard_patch(pb):
+        monitor.enabled = True
+        monitor._capture_change()
+        pb.setString_forType_('new user copy', 'text')
+        monitor.trigger_paste()
+        callback.assert_not_called()
+        assert monitor._staged_content is None
+        assert monitor._saved_clipboard_items is None
+        monitor.enabled = False
+    assert pb.items[0].data == {'text': b'new user copy'}
+
+
+def test_image_copy_before_poll_also_invalidates_staged_paste():
+    pb = Pasteboard()
+    callback = Mock()
+    monitor = ClipboardMonitor(callback)
+    with pasteboard_patch(pb):
+        monitor.enabled = True
+        monitor._capture_change()
+        pb.clearContents()
+        monitor.trigger_paste()
+    callback.assert_not_called()
+    assert monitor._staged_content is None
