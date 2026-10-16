@@ -296,14 +296,16 @@ class HumanErrors:
         """Find a word near an approximate position."""
         start = max(0, approximate_pos - window)
         end = min(len(text), approximate_pos + window + len(word))
-        search_region = text[start:end]
-
-        # Case-insensitive word boundary search
+        # Match against the full source so a search-window edge cannot invent
+        # a word boundary. Relocate only to the uniquely nearest occurrence.
         pattern = r"\b" + re.escape(word) + r"\b"
-        match = re.search(pattern, search_region, re.IGNORECASE)
-        if match:
-            return start + match.start()
-        return -1
+        positions = [match.start() for match in re.finditer(pattern, text, re.IGNORECASE)
+                     if start <= match.start() and match.end() <= end]
+        if not positions:
+            return -1
+        distance = min(abs(position - approximate_pos) for position in positions)
+        nearest = [position for position in positions if abs(position - approximate_pos) == distance]
+        return nearest[0] if len(nearest) == 1 else -1
 
     @staticmethod
     def _parse_json(text: str) -> Optional[dict]:

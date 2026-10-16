@@ -457,6 +457,10 @@ class TypingPlanner:
 
             # Normal typing — accumulate a run
             run_start = i
+            # A dropped/double/unchanged typo is unsuitable in simple mode.
+            # Consume its source character normally instead of rerolling the
+            # same position forever when the configured error rate is 100%.
+            i += 1
             while i < len(text) and not (text[i].isalpha() and self._rng.random() < self.settings.error_rate):
                 i += 1
                 if i - run_start > 8:  # break runs to keep them natural

@@ -427,7 +427,9 @@ class TypingEngine:
         if self._rng.random() < self.profile.mistakes.immediate_notice_rate:
             return 0
         lo, hi = self.settings.correction_delay_chars
-        return self._rng.randint(max(lo, 1), hi)
+        if hi <= 0:
+            return 0
+        return self._rng.randint(max(1, min(lo, hi)), hi)
 
     def rewrite_probability_for_length(self, total_chars: int) -> float:
         """Sigmoid scaling: short text = rare rewrites, long text = frequent."""
