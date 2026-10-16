@@ -269,13 +269,12 @@ class TypingPlanner:
         # --- Apply human errors (grammar, punctuation, spelling that stay in) ---
         if self.settings.grammar_error_rate > 0 or self.settings.punctuation_error_rate > 0:
             modified_text, misspellings = self._human_errors.process_text(segment.text)
-            # Build lookup for misspellings: word -> (wrong, correct)
-            misspell_by_word = {}
-            for wrong, correct, _pos in misspellings:
-                misspell_by_word[correct.lower()] = (wrong, correct)
+            # Preserve the validated occurrence, rather than redirecting a typo
+            # to the first case-insensitive match elsewhere in the paragraph.
+            misspell_by_position = {pos: (wrong, correct) for wrong, correct, pos in misspellings}
         else:
             modified_text = segment.text
-            misspell_by_word = {}
+            misspell_by_position = {}
 
         # --- Break text into typeable chunks ---
         chunks = self._break_into_chunks(modified_text, text_offset=self._char_position)
@@ -287,7 +286,12 @@ class TypingPlanner:
                               max_typo_distance=self.profile.proofread.max_proofread_distance)
         applied_actions = 0
 
+        segment_offset = 0
         for chunk in chunks:
+            chunk_misspellings = {pos - segment_offset: pair
+                                  for pos, pair in misspell_by_position.items()
+                                  if segment_offset <= pos < segment_offset + len(chunk.text)}
+            segment_offset += len(chunk.text)
             # Track sentences and inject periodic thought pauses
             if chunk.is_thought_boundary:
                 sentences_since_thought_pause = 0
@@ -328,7 +332,7 @@ class TypingPlanner:
             if not restructured:
                 self._chunk_prefix = emitted.text
                 chunk_actions, chunk_chars, chunk_typos = self._plan_chunk(
-                    chunk, misspell_by_word=misspell_by_word, total_paste_chars=total_paste_chars
+                    chunk, misspell_by_position=chunk_misspellings, total_paste_chars=total_paste_chars
                 )
                 actions.extend(chunk_actions)
                 char_count += chunk_chars
@@ -377,9 +381,10 @@ class TypingPlanner:
             char = text[i]
 
             # Occasional single-char mistake (backspace and fix, no arrow keys)
-            if char.isalpha() and self._rng.random() < self.settings.error_rate:
+            if char.isascii() and char.isalpha() and self._rng.random() < self.settings.error_rate:
                 typo_char = self.engine.generate_typo(char)
-                if typo_char and typo_char != char and len(typo_char) == 1:
+                if (typo_char and typo_char != char and len(typo_char) == 1
+                        and typo_char.isascii() and typo_char.isprintable()):
                     # Type wrong char, backspace, type correct
                     actions.append(TypeText(text=typo_char))
                     actions.append(Rewrite.simple(delete_count=1, text=char))
@@ -389,7 +394,11 @@ class TypingPlanner:
 
             # Normal typing — accumulate a run
             run_start = i
-            while i < len(text) and not (text[i].isalpha() and self._rng.random() < self.settings.error_rate):
+            # A dropped/double/unchanged typo is unsuitable in simple mode.
+            # Consume its source character normally instead of rerolling the
+            # same position forever when the configured error rate is 100%.
+            i += 1
+            while i < len(text) and not (text[i].isascii() and text[i].isalpha() and self._rng.random() < self.settings.error_rate):
                 i += 1
                 if i - run_start > 8:  # break runs to keep them natural
                     break
@@ -559,7 +568,7 @@ class TypingPlanner:
     # ------------------------------------------------------------------
 
     def _plan_chunk(
-        self, chunk: _Chunk, misspell_by_word: dict[str, tuple[str, str]] | None = None,
+        self, chunk: _Chunk, misspell_by_position: dict[int, tuple[str, str]] | None = None,
         total_paste_chars: int = 500,
     ) -> tuple[list[TypingAction], int, list[tuple[str, str, int]]]:
         """Plan actions for a single chunk of text.
@@ -570,7 +579,7 @@ class TypingPlanner:
         actions: list[TypingAction] = []
         text = chunk.text
         char_count = 0
-        misspell_by_word = misspell_by_word or {}
+        misspell_by_position = misspell_by_position or {}
         # Track uncorrected typos: (wrong_char, correct_char, position_in_typed_output)
         uncorrected_typos: list[tuple[str, str, int]] = []
 
@@ -587,19 +596,21 @@ class TypingPlanner:
             actions.append(Pause(duration=self.engine.paragraph_pause_duration()))
             return actions, char_count, []
 
-        # --- Find word positions for misspelling corrections ---
-        # Match by word content (not position) so it works across chunk boundaries.
-        # pop() each match so the same word is only misspelled once.
-        word_misspells: dict[int, tuple[str, str, int]] = {}  # chunk-local pos -> (wrong, correct, length)
+        # Apply only the exact source occurrence and restore its original case.
+        word_misspells: dict[int, tuple[str, str, int]] = {}
         for match in re.finditer(r"\b(\w+)\b", text):
-            word = match.group(1)
-            lower = word.lower()
-            if lower in misspell_by_word:
-                wrong, correct = misspell_by_word.pop(lower)
-                word_misspells[match.start()] = (wrong, correct, len(word))
+            pair = misspell_by_position.get(match.start())
+            if pair:
+                wrong, correct = pair
+                word = match.group(1)
+                if word.lower() == correct.lower():
+                    word_misspells[match.start()] = (wrong, word, len(word))
 
         # --- Pre-scan for single-char mistake positions (adjacent key misclicks) ---
-        mistake_positions = self._pick_mistake_positions(text)
+        # Delayed corrections may backspace through following source text.
+        # Native editors delete graphemes, so Unicode code-point counts cannot
+        # safely identify the characters to remove. Keep natural typing timing.
+        mistake_positions = self._pick_mistake_positions(text) if text.isascii() else set()
         rewrite_positions_list = self._pick_rewrite_positions(text, total_paste_chars)
         # Build a dict: pos -> granularity for quick lookup
         rewrite_positions: dict[int, str] = {pos: gran for pos, gran in rewrite_positions_list}
@@ -688,7 +699,7 @@ class TypingPlanner:
 
                 # Research: 35-44% of backspace presses are false alarms.
                 # Occasionally backspace correct text then retype it.
-                if len(run_text) >= 3 and self.engine.should_false_alarm():
+                if text.isascii() and len(run_text) >= 3 and self.engine.should_false_alarm():
                     fa_chars = min(self.engine.false_alarm_chars(), len(run_text))
                     deleted_text = run_text[-fa_chars:]
                     actions.append(Pause(duration=self._rng.uniform(0.2, 0.5)))
