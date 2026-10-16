@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import threading
+import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -82,8 +83,21 @@ def get_api_key() -> str:
 def save_settings_dict(settings: dict) -> None:
     """Persist settings dict to disk."""
     SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f, indent=2)
+    # Serialize first: invalid values must not truncate a working configuration.
+    payload = json.dumps(settings, indent=2, allow_nan=False)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                         dir=SETTINGS_DIR, delete=False) as f:
+            temporary = Path(f.name)
+            # NamedTemporaryFile is owner-only, including API keys in settings.
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, SETTINGS_FILE)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     logger.info("Settings saved to %s", SETTINGS_FILE)
 
 
