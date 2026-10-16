@@ -200,13 +200,16 @@ class KeystrokeSimulator:
             time.sleep(delay)
 
     def wait(self, seconds: float) -> None:
-        """Sleep for `seconds`, but check for stop/pause periodically."""
-        end = time.time() + seconds
-        while time.time() < end:
+        """Wait for active time, preserving the remaining delay across pauses."""
+        remaining = seconds
+        while remaining > 0:
             if not self._check_state():
                 return
-            remaining = end - time.time()
-            time.sleep(min(0.05, max(0, remaining)))
+            # _check_state may wait for a long manual pause. Do not count that
+            # time toward a planned thinking pause or keystroke delay.
+            started = time.monotonic()
+            time.sleep(min(0.05, remaining))
+            remaining -= time.monotonic() - started
 
     # ------------------------------------------------------------------
     # Internal helpers
