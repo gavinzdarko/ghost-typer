@@ -6,6 +6,7 @@ of TypingActions, pre-planning mistakes, pauses, and rewrites.
 
 from __future__ import annotations
 
+import math
 import random
 import re
 from dataclasses import dataclass
@@ -1366,7 +1367,13 @@ class TypingPlanner:
             for entry in self._behavioral_content.get("word_speed_map", []):
                 w = entry.get("word", "")
                 if w:
-                    self._word_speed_cache[w.lower()] = entry.get("multiplier", 1.0)
+                    try:
+                        factor = float(entry.get("multiplier", 1.0))
+                    except (TypeError, ValueError):
+                        factor = 1.0
+                    self._word_speed_cache[w.lower()] = (
+                        factor if math.isfinite(factor) and 0.1 <= factor <= 10.0 else 1.0
+                    )
         return self._word_speed_cache.get(word.lower(), 1.0)
 
     def _build_word_speed_actions(self, run_text: str) -> list[TypingAction]:
@@ -1395,7 +1402,9 @@ class TypingPlanner:
                 continue
 
             # Determine speed multiplier
-            multiplier = self._get_word_speed(token)
+            # The AI word map describes delay factors (>1 = harder/slower),
+            # whereas TypeText and quote/composition profiles describe speed.
+            multiplier = 1.0 / self._get_word_speed(token)
 
             # Quote speed override (Feature 10)
             quote_mult = self._get_quote_multiplier(self._char_position)

@@ -736,7 +736,7 @@ class Orchestrator:
                 simulator.wait(engine.peek_pause_duration())
                 engine.on_peek()
 
-            delay = engine.delay_for_keystroke(char, prev_char) * action.speed_multiplier
+            delay = engine.delay_for_keystroke(char, prev_char) / action.speed_multiplier
             simulator.wait(delay)
             simulator.type_char(char)
             engine.on_char_typed(char)
