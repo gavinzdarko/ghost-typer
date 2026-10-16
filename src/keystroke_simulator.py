@@ -61,6 +61,10 @@ MODIFIER_NAMES: set[str] = {
 }
 
 
+class KeystrokeError(RuntimeError):
+    """A keyboard backend failed; the session must not report success."""
+
+
 class KeystrokeSimulator:
     """Sends real keystrokes to macOS via pynput."""
 
@@ -124,9 +128,13 @@ class KeystrokeSimulator:
                 return False
             try:
                 fn(*args)
-            except Exception:
-                logger.debug("CGEvent call failed (likely shutdown)", exc_info=True)
-                return False
+            except Exception as exc:
+                self._active.clear()
+                logger.error("Keyboard event failed; stopping typing", exc_info=True)
+                raise KeystrokeError(
+                    "Could not send a keyboard event. Check macOS Accessibility "
+                    "permission before retrying."
+                ) from exc
         return True
 
     # ------------------------------------------------------------------
