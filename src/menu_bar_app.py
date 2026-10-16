@@ -81,6 +81,8 @@ class GhostTyperApp(rumps.App):
     def __init__(self, orchestrator: Orchestrator):
         super().__init__(name="Ghost Typer", title=None, icon=ICON_OFF, template=True, quit_button=None)
 
+        self._state_effects_lock = threading.Lock()
+        self._state_effects_revision = -1
         self.orchestrator = orchestrator
         self.orchestrator.on_state_change = self._on_state_change
         self.orchestrator.on_progress = self._on_progress
@@ -396,13 +398,23 @@ class GhostTyperApp(rumps.App):
 
     def _on_state_change(self, new_state: OrchestratorState) -> None:
         """Update menu bar, progress overlay, and hotkey suppression when state changes."""
-        # Suppress hotkey modifier tracking during typing
-        if new_state == OrchestratorState.TYPING:
-            self._hotkey_listener.suppress()
-        elif new_state in (OrchestratorState.IDLE, OrchestratorState.PAUSED):
-            self._hotkey_listener.unsuppress()
+        # State callbacks run outside the orchestrator's locks and may arrive
+        # after a later transition. Serialize only these immediate hotkey effects
+        # so an old resume cannot suppress controls after completion unsuppressed
+        # them. Never hold this lock while dispatching or running GUI callbacks.
+        with self._state_effects_lock:
+            state, revision = self.orchestrator.state_snapshot
+            if new_state != state or revision <= self._state_effects_revision:
+                return
+            self._state_effects_revision = revision
+            if new_state == OrchestratorState.TYPING:
+                self._hotkey_listener.suppress()
+            elif new_state in (OrchestratorState.IDLE, OrchestratorState.PAUSED):
+                self._hotkey_listener.unsuppress()
 
         def _update_gui():
+            if self.orchestrator.state_snapshot != (new_state, revision):
+                return
             if new_state == OrchestratorState.IDLE:
                 if self.orchestrator.is_enabled:
                     self.icon = ICON_IDLE

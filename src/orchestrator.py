@@ -91,6 +91,7 @@ class Orchestrator:
 
         # Typing state
         self._state = OrchestratorState.IDLE
+        self._state_revision = 0
         self._state_lock = threading.Lock()
         self._session_lock = threading.RLock()
         self._typing_thread: Optional[threading.Thread] = None
@@ -127,6 +128,12 @@ class Orchestrator:
         with self._state_lock:
             return self._state
 
+    @property
+    def state_snapshot(self) -> tuple[OrchestratorState, int]:
+        """Identify a transition even when a later session reuses its state."""
+        with self._state_lock:
+            return self._state, self._state_revision
+
     @state.setter
     def state(self, new_state: OrchestratorState) -> None:
         self._set_state(new_state)
@@ -138,6 +145,7 @@ class Orchestrator:
             if expected is not None and old != expected:
                 return False
             self._state = new_state
+            self._state_revision += 1
         logger.info("State: %s -> %s", old.name, new_state.name)
         cb = self.on_state_change  # snapshot to avoid TOCTOU
         if cb:
