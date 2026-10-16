@@ -325,48 +325,56 @@ class Orchestrator:
     _CLIPBOARD_SENTINEL = "\x00__GHOST_TYPER_EMPTY__"
 
     def _cell_has_content(self, simulator: KeystrokeSimulator) -> bool:
-        """Check if the current cell has content by copying and reading clipboard.
+        """Probe a cell while preserving every pasteboard representation.
 
-        Tab in Google Docs selects cell content automatically.
-        We set a sentinel on the clipboard, then Cmd+C. If clipboard
-        changes from the sentinel, the cell had content.
+        Restoration is conditional on the revision still belonging to this probe;
+        a later clipboard writer takes ownership and must never be overwritten.
         """
         import AppKit
         pb = AppKit.NSPasteboard.generalPasteboard()
+        with self.clipboard_monitor.suspended():
+            saved_items = []
+            for item in pb.pasteboardItems() or []:
+                saved = AppKit.NSPasteboardItem.alloc().init()
+                for pasteboard_type in item.types():
+                    data = item.dataForType_(pasteboard_type)
+                    if data is None or not saved.setData_forType_(data, pasteboard_type):
+                        raise RuntimeError("Could not preserve the clipboard for a cell check")
+                saved_items.append(saved)
 
-        # Pause clipboard monitor so it doesn't interfere
-        old_enabled = self.clipboard_monitor.enabled
-        self.clipboard_monitor.enabled = False
-
-        # Set sentinel
-        pb.clearContents()
-        pb.setString_forType_(self._CLIPBOARD_SENTINEL, AppKit.NSPasteboardTypeString)
-        time.sleep(0.05)
-
-        # Select all text in the cell: Home then Shift+End
-        simulator.press_key("home")
-        time.sleep(0.1)
-        simulator.hotkey("shift", "end")
-        time.sleep(0.15)
-
-        # Copy whatever is selected
-        simulator.hotkey("command", "c")
-        time.sleep(0.35)
-
-        # Read back
-        text = pb.stringForType_(AppKit.NSPasteboardTypeString) or ""
-        has_content = text != self._CLIPBOARD_SENTINEL and len(text.strip()) > 0
-
-        logger.info("Cell check: clipboard=%r, sentinel=%r, has_content=%s",
-                     text[:50] if text else "", self._CLIPBOARD_SENTINEL[:20], has_content)
-
-        # Restore clipboard monitor
-        self.clipboard_monitor.enabled = old_enabled
-
-        return has_content
-
-        content = self._read_clipboard().strip()
-        return len(content) > 0
+            owned_revision = None
+            try:
+                pb.clearContents()
+                owned_revision = pb.changeCount()
+                if not pb.setString_forType_(self._CLIPBOARD_SENTINEL, AppKit.NSPasteboardTypeString):
+                    raise RuntimeError("Could not prepare clipboard for a cell check")
+                owned_revision = pb.changeCount()
+                simulator.wait(0.05)
+                simulator.hotkey("command", "left")
+                simulator.wait(0.1)
+                simulator.hotkey("command", "shift", "right")
+                simulator.wait(0.15)
+                if pb.changeCount() != owned_revision:
+                    raise RuntimeError("Clipboard changed during a cell check; retry table fill")
+                simulator.hotkey("command", "c")
+                # Capture the copy response as soon as it arrives. Any subsequent
+                # revision belongs to another writer and is preserved in finally.
+                for _ in range(7):
+                    simulator.wait(0.05)
+                    revision = pb.changeCount()
+                    if revision != owned_revision:
+                        owned_revision = revision
+                        break
+                text = pb.stringForType_(AppKit.NSPasteboardTypeString) or ""
+                if pb.changeCount() != owned_revision:
+                    raise RuntimeError("Clipboard changed during a cell check; retry table fill")
+                return text != self._CLIPBOARD_SENTINEL and bool(text.strip())
+            finally:
+                if owned_revision is not None and pb.changeCount() == owned_revision:
+                    pb.clearContents()
+                    if saved_items and not pb.writeObjects_(saved_items):
+                        raise RuntimeError("Could not restore clipboard after a cell check")
+                    self.clipboard_monitor.acknowledge_change(pb.changeCount())
 
     def _table_fill_pipeline(self, items: list[ClipboardContent], skip_columns: int = 1) -> None:
         """Type each queued item with TAB between them, auto-skipping filled cells."""

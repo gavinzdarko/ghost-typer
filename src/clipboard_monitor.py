@@ -5,6 +5,7 @@ Background thread that watches the macOS clipboard for changes and triggers the 
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 import threading
 import time
 from typing import Callable, Optional
@@ -59,6 +60,8 @@ class ClipboardMonitor:
         self._on_change = on_clipboard_change
         self.start_delay = start_delay
         self._enabled = False
+        self._clipboard_lock = threading.RLock()
+        self._suspensions = 0
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._last_change_count: int = 0
@@ -76,6 +79,21 @@ class ClipboardMonitor:
     def enabled(self, value: bool) -> None:
         self._enabled = value
         logger.info("Clipboard monitor %s", "enabled" if value else "disabled")
+
+    @contextmanager
+    def suspended(self):
+        """Serialize internal pasteboard transactions without changing user ON/OFF."""
+        with self._clipboard_lock:
+            self._suspensions += 1
+            try:
+                yield
+            finally:
+                self._suspensions -= 1
+
+    def acknowledge_change(self, change_count: int) -> None:
+        """Ignore a pasteboard revision written by an internal transaction."""
+        with self._clipboard_lock:
+            self._last_change_count = change_count
 
     def start(self) -> None:
         """Start the clipboard monitoring background thread."""
@@ -103,29 +121,31 @@ class ClipboardMonitor:
         logger.debug("Clipboard monitor loop started")
         while not self._stop_event.is_set():
             try:
-                if self._enabled:
-                    current_count = self._get_change_count()
-                    if current_count != self._last_change_count:
-                        self._last_change_count = current_count
-                        content = self._read_clipboard()
-                        if content and content.text.strip():
-                            logger.info("Clipboard captured: %s", content)
-                            if self._immediate_mode:
-                                # Table fill mode: record and clear clipboard
-                                # so accidental Cmd+V won't paste (version history).
-                                self._clear_clipboard()
-                                self._last_change_count = self._get_change_count()
-                                try:
-                                    self._on_change(content)
-                                except Exception:
-                                    logger.exception("Error in clipboard change callback")
-                            else:
-                                # Normal mode: stage and wait for Cmd+V
-                                with self._staged_lock:
-                                    self._staged_content = content
-                                self._clear_clipboard()
-                                self._last_change_count = self._get_change_count()
-                                logger.info("Text staged — press Cmd+V to start typing")
+                with self._clipboard_lock:
+                    if self._enabled and not self._suspensions:
+                        current_count = self._get_change_count()
+                        if current_count != self._last_change_count:
+                            self._last_change_count = current_count
+                            content = self._read_clipboard()
+                            if content and content.text.strip():
+                                logger.info("Clipboard captured: %s", content)
+                                if self._immediate_mode:
+                                    # Table fill mode: record and clear clipboard
+                                    # so accidental Cmd+V won't paste (version history).
+                                    self._clear_clipboard()
+                                    self._last_change_count = self._get_change_count()
+                                    try:
+                                        self._on_change(content)
+                                    except Exception:
+                                        logger.exception("Error in clipboard change callback")
+                                else:
+                                    # Normal mode: stage and wait for Cmd+V
+                                    with self._staged_lock:
+                                        self._staged_content = content
+                                    self._clear_clipboard()
+                                    self._last_change_count = self._get_change_count()
+                                    logger.info("Text staged — press Cmd+V to start typing")
+
             except Exception:
                 logger.exception("Error in clipboard monitor loop")
 
@@ -162,7 +182,7 @@ class ClipboardMonitor:
 
     def trigger_paste(self) -> None:
         """Called when user presses Cmd+V — start typing the staged content."""
-        if not self._enabled:
+        if not self._enabled or self._suspensions:
             return
         with self._staged_lock:
             content = self._staged_content
