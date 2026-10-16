@@ -57,3 +57,18 @@ def test_multiple_sparse_grammar_and_punctuation_edits_remain_accepted():
     text = "The student does not know, because they are tired and could have studied."
     modified = text.replace("does not", "dont").replace(",", "").replace("could have", "could of")
     assert process(text, {"modified_text": modified}) == (modified, [])
+
+
+@pytest.mark.parametrize("wrong", ["\bThe", "The\x00", "th\u0301e", "👨‍👩‍👧‍👦"])
+def test_temporary_misspellings_cannot_emit_controls_or_unreliable_backspace_counts(wrong):
+    text = "The source remains intact."
+    assert process(text, {"modified_text": text, "misspellings": [
+        {"wrong": wrong, "correct": "The", "position": 0},
+    ]}) == (text, [])
+
+
+def test_ascii_temporary_typo_can_restore_a_unicode_source_word():
+    text = "The café opens today."
+    assert process(text, {"modified_text": text, "misspellings": [
+        {"wrong": "cafe", "correct": "café", "position": 4},
+    ]}) == (text, [("cafe", "café", 4)])
