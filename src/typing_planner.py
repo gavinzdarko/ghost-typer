@@ -29,6 +29,7 @@ from .models import (
 )
 from .human_errors import HumanErrors
 from .typing_engine import TypingEngine
+from .planned_text import PlannedText, replace_known_span
 
 # Google Docs keyboard shortcuts (macOS)
 FORMAT_SHORTCUTS: dict[str, tuple[str, ...]] = {
@@ -183,6 +184,7 @@ class TypingPlanner:
 
         # Track cumulative text typed so far (for revisit targeting)
         typed_so_far = ""
+        navigation_valid = True
 
         for seg_idx, segment in enumerate(segments):
             if simple:
@@ -193,11 +195,14 @@ class TypingPlanner:
                 )
             actions.extend(seg_actions)
             total_chars += seg_chars
-            typed_so_far += segment.text
+            state = PlannedText(typed_so_far).apply(seg_actions)
+            navigation_valid = navigation_valid and state.valid
+            typed_so_far = state.text
 
             # At paragraph boundaries, occasionally go back and revise earlier text
             if (
                 not simple
+                and navigation_valid
                 and seg_idx > 0
                 and seg_idx < len(segments) - 1
                 and total_paste_chars > 300
@@ -207,6 +212,7 @@ class TypingPlanner:
                 )
                 if revisit_actions:
                     actions.extend(revisit_actions)
+                    typed_so_far = PlannedText(typed_so_far).apply(revisit_actions).text
 
         # --- Final proofreading pass (Feature 13) ---
         if not simple:
@@ -796,6 +802,7 @@ class TypingPlanner:
             revisit_actions = self._build_revisit(typed_so_far, original, revised)
             if revisit_actions:
                 actions.extend(revisit_actions)
+                typed_so_far = PlannedText(typed_so_far).apply(revisit_actions).text
                 self._revisit_count += 1
                 if self._revisit_count >= max_revisits:
                     break
@@ -805,106 +812,20 @@ class TypingPlanner:
     def _build_revisit(
         self, typed_so_far: str, original: str, revised: str,
     ) -> list[TypingAction]:
-        """Build actions to navigate back, select text, and replace it.
-
-        Sequence:
-        1. Pause (re-reading, thinking about earlier text)
-        2. Cmd+Home to jump to start of document
-        3. Cmd+F to open Find, type the search text, press Enter to find it
-           Actually, simpler: Use Cmd+Home then Cmd+G (or Cmd+F) — but that's
-           app-specific. Instead, use the selection approach:
-           - Cmd+Home to jump to start
-           - Cmd+Shift+End to select all
-           Actually the simplest reliable approach for Google Docs:
-           - Arrow left many times to get near the target, OR
-           - Cmd+Up to jump to start, then arrow right to the target position
-        4. Use Shift+Right to select the original text
-        5. Type the revised text (overwrites selection)
-        6. Cmd+End to jump back to the end
-        """
-        actions: list[TypingAction] = []
-
-        # Find position of the original text
-        pos = typed_so_far.find(original)
-        if pos < 0:
+        """Revise a unique emitted span and return to our insertion cursor."""
+        edits = replace_known_span(
+            typed_so_far, original, revised,
+            min_distance=self.profile.proofread.revisit_min_distance,
+        )
+        if not edits:
             return []
-
-        # Calculate how far back from the end
-        chars_back = len(typed_so_far) - pos
-
-        # Don't revisit text that's too close (that's just normal proofreading)
-        if chars_back < self.profile.proofread.revisit_min_distance:
-            return []
-
-        # --- Pause: re-reading earlier text ---
-        actions.append(Pause(
+        return [Pause(
             duration=self._r(self.profile.proofread.revisit_re_reading_pause),
             description="Re-reading earlier text, reconsidering",
-        ))
-
-        # --- Navigate to start of document ---
-        actions.append(ApplyFormatting(
-            format_type=FormatType.BOLD,  # dummy — just want the hotkey
-            shortcut=("cmd", "up"),
-            description="Jump to start of document",
-        ))
-        actions.append(Pause(duration=self._r(self.profile.proofread.revisit_nav_pause)))
-
-        # --- Arrow right to the target position ---
-        # Use Cmd+Right (word jump) for most of the distance, then fine-tune
-        # Approximate: each Cmd+Right moves ~5-8 chars (one word)
-        words_to_jump = pos // 6  # rough estimate
-        for _ in range(words_to_jump):
-            actions.append(ApplyFormatting(
-                format_type=FormatType.BOLD,
-                shortcut=("opt", "right"),
-                description="Word jump right",
-            ))
-
-        # Fine-tune with individual arrow rights
-        fine_tune = pos - (words_to_jump * 6)
-        if fine_tune > 0:
-            for _ in range(min(fine_tune, 20)):
-                actions.append(PressKey(key="right"))
-
-        # --- Small pause: found the spot ---
-        actions.append(Pause(
-            duration=self._r(self.profile.proofread.revisit_found_spot_pause),
-            description="Found the text to revise",
-        ))
-
-        # --- Select the original text with Shift+Right ---
-        for _ in range(len(original)):
-            actions.append(ApplyFormatting(
-                format_type=FormatType.BOLD,
-                shortcut=("shift", "right"),
-                description="Select character",
-            ))
-
-        # --- Brief pause before typing replacement ---
-        actions.append(Pause(
-            duration=self._r(self.profile.proofread.revisit_before_retype_pause),
-            description="About to retype",
-        ))
-
-        # --- Type the revised text (overwrites selection) ---
-        actions.append(TypeText(text=revised))
-
-        # --- Jump back to end of document ---
-        actions.append(Pause(duration=self._r(self.profile.proofread.revisit_jump_back_pause)))
-        actions.append(ApplyFormatting(
-            format_type=FormatType.BOLD,
-            shortcut=("cmd", "down"),
-            description="Jump to end of document",
-        ))
-
-        # --- Small pause before continuing ---
-        actions.append(Pause(
+        ), *edits, Pause(
             duration=self._r(self.profile.proofread.revisit_resume_pause),
             description="Resuming typing after revisit",
-        ))
-
-        return actions
+        )]
 
     # ------------------------------------------------------------------
     # Word-level misspelling (type wrong word, notice, fix)
