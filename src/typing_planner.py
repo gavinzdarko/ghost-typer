@@ -111,7 +111,7 @@ def validate_behavioral_content(data: object, text: str) -> dict:
             def number(name, low, high, integer=False):
                 value = entry.get(name)
                 return (isinstance(value, (int, float)) and not isinstance(value, bool)
-                        and math.isfinite(value) and low <= value <= high
+                        and low <= value <= high and math.isfinite(value)
                         and (not integer or isinstance(value, int)))
             if key == "word_speed_map":
                 okay = string("word", 100) and number("multiplier", .1, 10)
