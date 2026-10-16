@@ -133,7 +133,7 @@ class ClipboardMonitor:
                         current_count = self._get_change_count()
                         if current_count != self._last_change_count:
                             self._last_change_count = current_count
-                            self._capture_change()
+                            self._capture_change(current_count)
 
             except Exception:
                 logger.exception("Error in clipboard monitor loop")
@@ -169,15 +169,26 @@ class ClipboardMonitor:
 
         return ClipboardContent(text=str(plain_text), html=str(html_data) if html_data else None)
 
-    def _capture_change(self) -> None:
-        """Capture a text revision while holding the clipboard transaction lock."""
+    def _capture_change(self, expected_revision: int | None = None) -> None:
+        """Capture one stable revision while holding the transaction lock."""
+        if expected_revision is None:
+            expected_revision = self._get_change_count()
         content = self._read_clipboard()
+        if self._get_change_count() != expected_revision:
+            return
         if not content or not content.text.strip():
+            # A later image/empty copy supersedes any older staged text.
+            self._saved_clipboard_items = None
+            self._owned_empty_revision = None
+            with self._staged_lock:
+                self._staged_content = None
             return
         logger.info("Clipboard captured: %s", content)
         if self._immediate_mode:
-            self._clear_clipboard()
-            self._last_change_count = self._get_change_count()
+            cleared_revision = self._clear_clipboard(expected_revision)
+            if cleared_revision is None:
+                return
+            self._last_change_count = cleared_revision
             try:
                 self._on_change(content)
             except Exception:
@@ -193,9 +204,11 @@ class ClipboardMonitor:
                     if data is None or not saved.setData_forType_(data, kind):
                         raise RuntimeError("Could not preserve clipboard content")
                 saved_items.append(saved)
-            self._clear_clipboard()
-            self._owned_empty_revision = self._get_change_count()
-            self._last_change_count = self._owned_empty_revision
+            cleared_revision = self._clear_clipboard(expected_revision)
+            if cleared_revision is None:
+                return
+            self._owned_empty_revision = cleared_revision
+            self._last_change_count = cleared_revision
             self._saved_clipboard_items = saved_items
             with self._staged_lock:
                 self._staged_content = content
@@ -242,13 +255,15 @@ class ClipboardMonitor:
                 logger.debug("Cmd+V pressed but no staged content")
 
     @staticmethod
-    def _clear_clipboard() -> None:
-        """Clear the clipboard so accidental Cmd+V won't paste duplicate text."""
+    def _clear_clipboard(expected_revision: int) -> int | None:
+        """Clear only the revision read by this capture, returning our revision."""
         if NSPasteboard is None:
-            return
-        try:
-            pb = NSPasteboard.generalPasteboard()
-            pb.clearContents()
-            logger.debug("Clipboard cleared after capture")
-        except Exception:
-            logger.exception("Failed to clear clipboard")
+            return None
+        pb = NSPasteboard.generalPasteboard()
+        if pb.changeCount() != expected_revision:
+            return None
+        # clearContents returns the revision it wrote. Reading changeCount
+        # afterward could accidentally claim ownership of a newer user's copy.
+        revision = pb.clearContents()
+        logger.debug("Clipboard cleared after capture")
+        return int(revision) if revision is not None else pb.changeCount()
