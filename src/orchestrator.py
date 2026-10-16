@@ -381,14 +381,6 @@ class Orchestrator:
         consumed_items = 0
         incomplete = False
         try:
-            # ── Separate items into cells and row breaks ──
-            cell_items: list[ClipboardContent | None] = []  # None = row break
-            for item in items:
-                if item.text == _ROW_BREAK:
-                    cell_items.append(None)
-                else:
-                    cell_items.append(item)
-
             total_word_count = 0
             cell_count = 0
             skipped_count = 0
@@ -406,10 +398,11 @@ class Orchestrator:
             self._simulator = simulator
             engine = TypingEngine(self._settings, profile=self._profile)
 
-            # Build a queue of items to type (skip row breaks for now)
+            # Keep original indices so row boundaries and unfinished items survive.
             type_queue = [(item, index) for index, item in enumerate(items) if item.text != _ROW_BREAK]
             queue_index = 0
             is_first_cell = True
+            row_skip_applied = False
             max_cells = len(type_queue) + 20  # safety limit to avoid infinite loop
 
             cells_visited = 0
@@ -419,10 +412,19 @@ class Orchestrator:
 
                 cells_visited += 1
 
-                # TAB to next cell (except the very first)
-                if not is_first_cell:
+                entry, original_index = type_queue[queue_index]
+                # A blank-line row separator means the next ordinary TAB crosses
+                # the row boundary, followed by the configured label columns.
+                has_row_break = any(item.text == _ROW_BREAK for item in items[consumed_items:original_index])
+                tabs = 0 if is_first_cell else 1
+                if has_row_break and not row_skip_applied:
+                    tabs += max(0, int(skip_columns))
+                    row_skip_applied = True
+                for _ in range(tabs):
+                    if self._cancel_event.is_set() or not simulator.is_active:
+                        return
                     simulator.press_key("tab")
-                    time.sleep(0.5)
+                    simulator.wait(0.5)
                 is_first_cell = False
 
                 # Check if this cell already has content
@@ -435,8 +437,6 @@ class Orchestrator:
                     continue
 
                 # Cell is empty — type the next queued item into it
-                entry, original_index = type_queue[queue_index]
-
                 segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
                 if segments and segments[0].text.strip():
                     cell_plan = self.fallback_planner.plan(segments, simple=True)
@@ -454,6 +454,7 @@ class Orchestrator:
                     raise ValueError("Table item did not contain typable text")
                 queue_index += 1
                 consumed_items = original_index + 1
+                row_skip_applied = False
                 cell_count += 1
 
             if self._cancel_event.is_set():
