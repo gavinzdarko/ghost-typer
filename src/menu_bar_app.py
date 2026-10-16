@@ -444,7 +444,7 @@ class GhostTyperApp(rumps.App):
                 self._pause_item.set_callback(self._pause_resume)
                 self._cancel_item.set_callback(self._cancel)
                 self._stop_animation()
-                self._progress_overlay.hide()
+                self._progress_overlay.pause()
 
         self._run_on_main(_update_gui)
 
