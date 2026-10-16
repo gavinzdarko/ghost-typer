@@ -44,6 +44,8 @@ class HotkeyListener:
         self._cmd_pressed = False
         self._key_listener: Optional[keyboard.Listener] = None
         self._suppressed = False  # True while typing engine is active
+        self._pressed_modifiers = {name: set() for name in ("shift", "ctrl", "cmd")}
+        self._f6_down = False
 
     def start(self) -> None:
         """Start listening for hotkeys."""
@@ -60,6 +62,10 @@ class HotkeyListener:
         if self._key_listener:
             self._key_listener.stop()
             self._key_listener = None
+        for keys in self._pressed_modifiers.values():
+            keys.clear()
+        self._shift_pressed = self._ctrl_pressed = self._cmd_pressed = False
+        self._f6_down = False
         logger.info("Hotkey listener stopped")
 
     def suppress(self) -> None:
@@ -104,26 +110,17 @@ class HotkeyListener:
         """
         # Always track modifier state, even during suppression
         mod = self._is_modifier(key)
-        if mod == "shift":
-            self._shift_pressed = True
-            return
-        elif mod == "ctrl":
-            self._ctrl_pressed = True
-            return
-        elif mod == "cmd":
-            self._cmd_pressed = True
+        if mod:
+            self._pressed_modifiers[mod].add(key)
+            setattr(self, f"_{mod}_pressed", True)
             return
 
-        if self._suppressed:
-            # During typing, respond to F6 for pause AND Shift+F6 for emergency stop
-            if key == keyboard.Key.f6:
-                if self._shift_pressed:
-                    if self._on_emergency_stop:
-                        logger.info("HOTKEY: Shift+F6 during typing — Emergency Stop")
-                        threading.Thread(target=self._on_emergency_stop, daemon=True).start()
-                elif self._on_toggle_pause:
-                    logger.info("HOTKEY: F6 during typing — Toggle Pause")
-                    threading.Thread(target=self._on_toggle_pause, daemon=True).start()
+        if key == keyboard.Key.f6:
+            # Key auto-repeat must not rapidly toggle pause or ON/OFF.
+            if self._f6_down:
+                return
+            self._f6_down = True
+        elif self._suppressed:
             return
 
         # Cmd+V = paste trigger
@@ -148,9 +145,8 @@ class HotkeyListener:
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         """Handle key release events. Always tracks modifiers, even when suppressed."""
         mod = self._is_modifier(key)
-        if mod == "shift":
-            self._shift_pressed = False
-        elif mod == "ctrl":
-            self._ctrl_pressed = False
-        elif mod == "cmd":
-            self._cmd_pressed = False
+        if mod:
+            self._pressed_modifiers[mod].discard(key)
+            setattr(self, f"_{mod}_pressed", bool(self._pressed_modifiers[mod]))
+        if key == keyboard.Key.f6:
+            self._f6_down = False
