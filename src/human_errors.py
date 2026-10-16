@@ -99,7 +99,7 @@ class HumanErrors:
 
         if self._api_key:
             try:
-                self._client = anthropic.Anthropic(api_key=self._api_key)
+                self._client = anthropic.Anthropic(api_key=self._api_key, max_retries=0)
             except Exception:
                 logger.exception("Failed to initialize Anthropic client for HumanErrors")
                 self._enabled = False

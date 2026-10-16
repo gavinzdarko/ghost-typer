@@ -98,7 +98,7 @@ class AIPlanner:
 
         if self._api_key:
             try:
-                self._client = anthropic.Anthropic(api_key=self._api_key)
+                self._client = anthropic.Anthropic(api_key=self._api_key, max_retries=0)
                 logger.info("AI Planner initialized with Claude API")
             except Exception:
                 logger.exception("Failed to initialize Anthropic client")
@@ -497,7 +497,7 @@ class AIRewriter:
 
         if self._api_key:
             try:
-                self._client = anthropic.Anthropic(api_key=self._api_key)
+                self._client = anthropic.Anthropic(api_key=self._api_key, max_retries=0)
             except Exception:
                 self._enabled = False
 
@@ -975,7 +975,7 @@ class AIProfileGenerator:
         resolved_key = (api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")) if enabled else None
         if resolved_key:
             try:
-                self._client = anthropic.Anthropic(api_key=resolved_key)
+                self._client = anthropic.Anthropic(api_key=resolved_key, max_retries=0)
                 self._enabled = True
             except Exception:
                 self._enabled = False
