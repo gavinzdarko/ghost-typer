@@ -39,10 +39,7 @@ class TextParser:
 
         if is_html:
             try:
-                segments = self._parse_html(content)
-                if segments:
-                    return segments
-                logger.warning("HTML parsing produced no segments, falling back to plain text")
+                return self._parse_html(content)
             except Exception:
                 logger.exception("HTML parsing failed, falling back to plain text")
 
@@ -108,7 +105,7 @@ class TextParser:
         for seg in segments:
             seg.formatting = {k: v for k, v in seg.formatting.items()
                               if k in ("paragraph_break", "linebreak", "list_type",
-                                       "list_index", "list_prefix", "heading_level")}
+                                       "list_index", "list_prefix", "heading_level", "preformatted")}
 
         return self._clean_segments(segments)
 
@@ -324,9 +321,18 @@ class TextParser:
             if not seg.text:
                 continue
 
-            # Skip whitespace-only non-break segments (phantom spaces from tag replacement)
-            if not seg.text.strip() and not seg.formatting.get("paragraph_break") and not seg.formatting.get("linebreak"):
-                continue
+            is_break = seg.formatting.get("paragraph_break") or seg.formatting.get("linebreak")
+            preserved = seg.formatting.get("preformatted")
+            if is_break:
+                # Source indentation between blocks is not visible HTML text.
+                while (cleaned and not cleaned[-1].text.strip()
+                       and not cleaned[-1].formatting.get("paragraph_break")
+                       and not cleaned[-1].formatting.get("linebreak")
+                       and not cleaned[-1].formatting.get("preformatted")):
+                    cleaned.pop()
+            elif not preserved and not seg.text.strip():
+                if not cleaned or cleaned[-1].formatting.get("paragraph_break") or cleaned[-1].formatting.get("linebreak"):
+                    continue
 
             # Collapse consecutive paragraph/linebreak breaks
             if (
@@ -335,7 +341,7 @@ class TextParser:
                 and (cleaned[-1].formatting.get("paragraph_break") or cleaned[-1].formatting.get("linebreak"))
             ):
                 # Keep the stronger break (paragraph > linebreak)
-                if seg.formatting.get("paragraph_break"):
+                if seg.formatting.get("paragraph_break") and (not cleaned[-1].formatting.get("paragraph_break") or len(seg.text) > len(cleaned[-1].text)):
                     cleaned[-1] = seg
                 continue
 
@@ -344,31 +350,38 @@ class TextParser:
         # Strip leading/trailing whitespace-only segments
         while cleaned and cleaned[0].text.strip() == "" and cleaned[0].formatting.get("paragraph_break"):
             cleaned.pop(0)
-        while cleaned and cleaned[-1].text.strip() == "" and cleaned[-1].formatting.get("paragraph_break"):
+        while (cleaned and not cleaned[-1].text.strip()
+               and not cleaned[-1].formatting.get("preformatted")
+               and not cleaned[-1].formatting.get("linebreak")):
             cleaned.pop()
 
         # Strip trailing whitespace from segments before breaks
         for i in range(len(cleaned) - 1):
-            if cleaned[i + 1].formatting.get("paragraph_break") or cleaned[i + 1].formatting.get("linebreak"):
+            if not cleaned[i].formatting.get("preformatted") and (cleaned[i + 1].formatting.get("paragraph_break") or cleaned[i + 1].formatting.get("linebreak")):
                 cleaned[i].text = cleaned[i].text.rstrip()
 
         # Merge adjacent text segments into larger plain-text chunks.
         merged: list[TextSegment] = []
         for seg in cleaned:
             is_break = seg.formatting.get("paragraph_break") or seg.formatting.get("linebreak")
-            if is_break:
+            if is_break or seg.formatting.get("preformatted"):
                 merged.append(seg)
                 continue
 
             # If previous segment is also inline text, merge them
-            if merged and not merged[-1].formatting.get("paragraph_break") and not merged[-1].formatting.get("linebreak"):
+            if merged and not merged[-1].formatting.get("preformatted") and not merged[-1].formatting.get("paragraph_break") and not merged[-1].formatting.get("linebreak"):
                 prev = merged[-1]
-                # Ensure space between segments if needed
-                if prev.text and seg.text and not prev.text[-1].isspace() and not seg.text[0].isspace():
-                    if (prev.text[-1].isalnum() or prev.text[-1] in ".!?,:;)") and seg.text[0].isalnum():
-                        prev.text += " "
-                prev.text += seg.text
+                # Inline boundaries have no implied spaces. Keep the DOM's
+                # actual whitespace and collapse it across adjacent nodes.
+                prev.text = re.sub(r" +", " ", prev.text + seg.text)
             else:
                 merged.append(TextSegment(text=seg.text, formatting={}))
 
-        return merged
+        # HTML whitespace at block edges does not produce visible content.
+        for i, seg in enumerate(merged):
+            if not (seg.formatting.get("paragraph_break") or seg.formatting.get("linebreak") or seg.formatting.get("preformatted")):
+                if i == 0 or merged[i - 1].formatting.get("paragraph_break") or merged[i - 1].formatting.get("linebreak"):
+                    seg.text = seg.text.lstrip(" ")
+                if i == len(merged) - 1 or merged[i + 1].formatting.get("paragraph_break") or merged[i + 1].formatting.get("linebreak"):
+                    seg.text = seg.text.rstrip(" ")
+        return [seg for seg in merged if seg.text]
