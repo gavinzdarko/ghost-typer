@@ -268,7 +268,7 @@ class TypingPlanner:
             misspell_by_word = {}
 
         # --- Break text into typeable chunks ---
-        chunks = self._break_into_chunks(modified_text)
+        chunks = self._break_into_chunks(modified_text, text_offset=self._char_position)
 
         sentences_since_thought_pause = 0
         # Every 2-4 sentences without a thought boundary, insert a thought pause
@@ -312,6 +312,7 @@ class TypingPlanner:
                     char_count += len(chunk.text)
                     self._restructure_count += 1
                     self._char_position += len(chunk.text)
+                    self._chars_since_distraction += len(chunk.text)
                     restructured = True
 
             if not restructured:
@@ -387,6 +388,7 @@ class TypingPlanner:
                 actions.append(TypeText(text=run_text))
                 char_count += len(run_text)
 
+        self._char_position += len(text)
         return actions, char_count
 
     # ------------------------------------------------------------------
@@ -571,6 +573,7 @@ class TypingPlanner:
         if text and not text.strip() and "\n" in text:
             actions.extend(PressKey(key="enter") if char == "\n" else TypeText(text=char) for char in text)
             char_count += len(text)
+            self._char_position += len(text)
             actions.append(Pause(duration=self.engine.paragraph_pause_duration()))
             return actions, char_count, []
 
@@ -604,6 +607,7 @@ class TypingPlanner:
                     actions.extend(rewrite_actions)
                     char_count += rewrite_chars
                     i += skip
+                    self._char_position += skip
                     continue
                 # Couldn't generate a different draft — remove and fall through
                 del rewrite_positions[i]
@@ -628,6 +632,7 @@ class TypingPlanner:
                 actions.extend(misspell_actions)
                 char_count += len(correct) + extra_skip
                 i += word_len + extra_skip
+                self._char_position += word_len + extra_skip
                 continue
 
             # Check for single-char mistake (adjacent key misclick)
@@ -644,6 +649,7 @@ class TypingPlanner:
                 actions.extend(mistake_actions)
                 char_count += mistake_chars
                 i += mistake_chars
+                self._char_position += mistake_chars
                 continue
 
             # Random thinking pause mid-chunk
@@ -1296,11 +1302,13 @@ class TypingPlanner:
         # Split into (word, separator) pairs preserving all characters
         tokens = re.split(r"(\s+)", run_text)
 
+        token_position = self._char_position
         for token in tokens:
             if not token:
                 continue
             if token.isspace():
                 actions.append(TypeText(text=token))
+                token_position += len(token)
                 continue
 
             # Determine speed multiplier
@@ -1309,12 +1317,12 @@ class TypingPlanner:
             multiplier = 1.0 / self._get_word_speed(token)
 
             # Quote speed override (Feature 10)
-            quote_mult = self._get_quote_multiplier(self._char_position)
+            quote_mult = self._get_quote_multiplier(token_position)
             if quote_mult is not None:
                 multiplier = min(multiplier, quote_mult)
 
             # Feature 8: Composition mode speed adjustment
-            comp_mult = self._get_composition_multiplier(self._char_position)
+            comp_mult = self._get_composition_multiplier(token_position)
             if comp_mult != 1.0:
                 multiplier *= comp_mult
 
@@ -1333,7 +1341,7 @@ class TypingPlanner:
                 actions.append(TypeText(text=token))
 
             # Feature 8: Composition clause-boundary pause
-            clause_pause = self._get_composition_clause_pause(token)
+            clause_pause = self._get_composition_clause_pause(token, token_position)
             if clause_pause > 0:
                 actions.append(Pause(duration=clause_pause, description="Composing next clause"))
 
@@ -1343,6 +1351,8 @@ class TypingPlanner:
                     duration=self._r(self.profile.behaviors.quote.source_glance_pause),
                     description="Glancing at source",
                 ))
+
+            token_position += len(token)
 
         # Merge adjacent TypeText actions with the same speed_multiplier for efficiency
         merged: list[TypingAction] = []
@@ -1496,7 +1506,7 @@ class TypingPlanner:
                     return cfg.copy_typing_speed_multiplier
         return 1.0
 
-    def _get_composition_clause_pause(self, token: str) -> float:
+    def _get_composition_clause_pause(self, token: str, char_position: int | None = None) -> float:
         """Return a clause-boundary pause if we're in composition mode and at a clause end."""
         cfg = self.profile.behaviors.composition_mode
         if not cfg.enabled:
@@ -1506,12 +1516,14 @@ class TypingPlanner:
         if not annotations:
             return 0.0
 
-        # Check if current position is in a composition zone
+        # Check the actual token position within this run.
+        if char_position is None:
+            char_position = self._char_position
         in_composition = False
         for ann in annotations:
             start = ann.get("start", -1)
             end = ann.get("end", -1)
-            if start <= self._char_position <= end and ann.get("mode") == "composition":
+            if start <= char_position <= end and ann.get("mode") == "composition":
                 in_composition = True
                 break
 
