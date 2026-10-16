@@ -14,9 +14,10 @@ logger = logging.getLogger(__name__)
 
 # Attempt AppKit import for native pasteboard access
 try:
-    from AppKit import NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString
+    from AppKit import NSPasteboard, NSPasteboardItem, NSPasteboardTypeHTML, NSPasteboardTypeString
 except ImportError:
     NSPasteboard = None
+    NSPasteboardItem = None
     NSPasteboardTypeHTML = None
     NSPasteboardTypeString = None
     logger.warning("AppKit not available — clipboard HTML detection will be limited")
@@ -70,6 +71,8 @@ class ClipboardMonitor:
         self._staged_lock = threading.Lock()
         # Immediate mode: call on_change right away (for table fill mode)
         self._immediate_mode = False
+        self._saved_clipboard_items = None
+        self._owned_empty_revision: int | None = None
 
     @property
     def enabled(self) -> bool:
@@ -77,7 +80,10 @@ class ClipboardMonitor:
 
     @enabled.setter
     def enabled(self, value: bool) -> None:
-        self._enabled = value
+        with self._clipboard_lock:
+            self._enabled = value
+            if not value:
+                self._restore_staged_clipboard()
         logger.info("Clipboard monitor %s", "enabled" if value else "disabled")
 
     @contextmanager
@@ -110,6 +116,7 @@ class ClipboardMonitor:
 
     def stop(self) -> None:
         """Stop the clipboard monitoring thread."""
+        self.enabled = False
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2.0)
@@ -126,25 +133,7 @@ class ClipboardMonitor:
                         current_count = self._get_change_count()
                         if current_count != self._last_change_count:
                             self._last_change_count = current_count
-                            content = self._read_clipboard()
-                            if content and content.text.strip():
-                                logger.info("Clipboard captured: %s", content)
-                                if self._immediate_mode:
-                                    # Table fill mode: record and clear clipboard
-                                    # so accidental Cmd+V won't paste (version history).
-                                    self._clear_clipboard()
-                                    self._last_change_count = self._get_change_count()
-                                    try:
-                                        self._on_change(content)
-                                    except Exception:
-                                        logger.exception("Error in clipboard change callback")
-                                else:
-                                    # Normal mode: stage and wait for Cmd+V
-                                    with self._staged_lock:
-                                        self._staged_content = content
-                                    self._clear_clipboard()
-                                    self._last_change_count = self._get_change_count()
-                                    logger.info("Text staged — press Cmd+V to start typing")
+                            self._capture_change()
 
             except Exception:
                 logger.exception("Error in clipboard monitor loop")
@@ -180,29 +169,77 @@ class ClipboardMonitor:
 
         return ClipboardContent(text=str(plain_text), html=str(html_data) if html_data else None)
 
-    def trigger_paste(self) -> None:
-        """Called when user presses Cmd+V — start typing the staged content."""
-        if not self._enabled or self._suspensions:
+    def _capture_change(self) -> None:
+        """Capture a text revision while holding the clipboard transaction lock."""
+        content = self._read_clipboard()
+        if not content or not content.text.strip():
             return
-        with self._staged_lock:
-            content = self._staged_content
-            self._staged_content = None
-        if content:
-            logger.info("Cmd+V triggered — starting typing for: %s", content)
-            accepted = False
+        logger.info("Clipboard captured: %s", content)
+        if self._immediate_mode:
+            self._clear_clipboard()
+            self._last_change_count = self._get_change_count()
             try:
-                # A busy orchestrator explicitly rejects the launch. Keep that
-                # content available for a later paste instead of consuming it.
-                accepted = self._on_change(content) is not False
+                self._on_change(content)
             except Exception:
                 logger.exception("Error in clipboard change callback")
-            finally:
-                if not accepted:
-                    with self._staged_lock:
-                        if self._staged_content is None:
-                            self._staged_content = content
         else:
-            logger.debug("Cmd+V pressed but no staged content")
+            # Keep every representation until this staged paste is accepted.
+            pb = NSPasteboard.generalPasteboard()
+            saved_items = []
+            for item in pb.pasteboardItems() or []:
+                saved = NSPasteboardItem.alloc().init()
+                for kind in item.types():
+                    data = item.dataForType_(kind)
+                    if data is None or not saved.setData_forType_(data, kind):
+                        raise RuntimeError("Could not preserve clipboard content")
+                saved_items.append(saved)
+            self._clear_clipboard()
+            self._owned_empty_revision = self._get_change_count()
+            self._last_change_count = self._owned_empty_revision
+            self._saved_clipboard_items = saved_items
+            with self._staged_lock:
+                self._staged_content = content
+            logger.info("Text staged — press Cmd+V to start typing")
+
+    def _restore_staged_clipboard(self) -> None:
+        """Return an unused staged copy on OFF/quit if we still own the clipboard."""
+        if NSPasteboard is not None and self._owned_empty_revision is not None:
+            pb = NSPasteboard.generalPasteboard()
+            if pb.changeCount() == self._owned_empty_revision:
+                pb.clearContents()
+                if self._saved_clipboard_items and not pb.writeObjects_(self._saved_clipboard_items):
+                    raise RuntimeError("Could not restore staged clipboard content")
+                self._last_change_count = pb.changeCount()
+        self._saved_clipboard_items = None
+        self._owned_empty_revision = None
+        with self._staged_lock:
+            self._staged_content = None
+
+    def trigger_paste(self) -> None:
+        """Called when user presses Cmd+V — start typing the staged content."""
+        with self._clipboard_lock:
+            if not self._enabled or self._suspensions:
+                return
+            with self._staged_lock:
+                content = self._staged_content
+                self._staged_content = None
+            if content:
+                logger.info("Cmd+V triggered — starting typing for: %s", content)
+                accepted = False
+                try:
+                    accepted = self._on_change(content) is not False
+                except Exception:
+                    logger.exception("Error in clipboard change callback")
+                finally:
+                    if accepted:
+                        self._saved_clipboard_items = None
+                        self._owned_empty_revision = None
+                    else:
+                        with self._staged_lock:
+                            if self._staged_content is None:
+                                self._staged_content = content
+            else:
+                logger.debug("Cmd+V pressed but no staged content")
 
     @staticmethod
     def _clear_clipboard() -> None:
