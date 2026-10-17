@@ -185,7 +185,13 @@ class TextParser:
 
         # Lists
         if tag == self.ORDERED_LIST_TAG:
-            counter = [0]
+            step = -1 if node.has_attr("reversed") else 1
+            default_start = len(node.find_all("li", recursive=False)) if step < 0 else 1
+            try:
+                start = int(node.get("start", default_start))
+            except (TypeError, ValueError):
+                start = default_start
+            counter = [start - step, step]
             segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context="numbered", list_counter=counter)
@@ -201,7 +207,11 @@ class TextParser:
 
         if tag == self.LIST_ITEM_TAG:
             if list_context == "numbered" and list_counter is not None:
-                list_counter[0] += 1
+                step = list_counter[1]
+                try:
+                    list_counter[0] = int(node["value"]) if node.has_attr("value") else list_counter[0] + step
+                except (TypeError, ValueError):
+                    list_counter[0] += step
                 prefix = f"{list_counter[0]}. "
                 fmt["list_type"] = "numbered"
                 fmt["list_index"] = list_counter[0]
