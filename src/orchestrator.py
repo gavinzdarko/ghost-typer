@@ -772,7 +772,7 @@ class Orchestrator:
                     simulator.wait(p.orchestration.formatting_hotkey_pause)
 
             elif isinstance(action, Pause):
-                simulator.wait(action.duration)
+                self._execute_pause(action.duration, engine, simulator)
 
             elif isinstance(action, MakeMistake):
                 prev_char = self._execute_mistake(action, engine, simulator, prev_char)
@@ -795,11 +795,17 @@ class Orchestrator:
                     prev_char = ""
 
             elif isinstance(action, DistractionPause):
-                simulator.wait(action.duration)
-                engine.recover_fatigue_during_pause(action.duration)
+                self._execute_pause(action.duration, engine, simulator)
 
             elif isinstance(action, AbandonWord):
                 prev_char = self._execute_abandon_word(action, engine, simulator, prev_char)
+
+    def _execute_pause(self, duration: float, engine: TypingEngine, simulator: KeystrokeSimulator) -> None:
+        """Apply rest to runtime timing state after a completed planned pause."""
+        simulator.wait(duration)
+        if not self._cancel_event.is_set() and simulator.is_active:
+            engine.on_pause()
+            engine.recover_fatigue_during_pause(duration)
 
     def _execute_type_text(
         self, action: TypeText, engine: TypingEngine, simulator: KeystrokeSimulator, prev_char: str
@@ -940,7 +946,7 @@ class Orchestrator:
         elif isinstance(action, Rewrite):
             return self._execute_rewrite(action, engine, simulator)
         elif isinstance(action, Pause):
-            simulator.wait(action.duration)
+            self._execute_pause(action.duration, engine, simulator)
             return prev_char
         elif isinstance(action, MakeMistake):
             return self._execute_mistake(action, engine, simulator, prev_char)
@@ -968,8 +974,7 @@ class Orchestrator:
                 simulator.wait(delay)
             return "" if action.key not in ("left", "right", "up", "down") else prev_char
         elif isinstance(action, DistractionPause):
-            simulator.wait(action.duration)
-            engine.recover_fatigue_during_pause(action.duration)
+            self._execute_pause(action.duration, engine, simulator)
             return prev_char
         elif isinstance(action, AbandonWord):
             return self._execute_abandon_word(action, engine, simulator, prev_char)
