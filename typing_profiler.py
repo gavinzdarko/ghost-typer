@@ -457,20 +457,21 @@ class TypingAnalyzer:
         correction_pause_before = [c.pause_before for c in self.corrections if c.pause_before < 5]
         correction_pause_after = [c.pause_after for c in self.corrections if c.pause_after < 5]
 
+        thinking_min = min(thinking_pauses) if thinking_pauses else 0.3
+        thinking_max = (statistics.quantiles(thinking_pauses, n=4)[2]
+                        if len(thinking_pauses) >= 4 else 4.0)
+        thinking_max = max(thinking_min, thinking_max)
+
         # --- Build settings (Ghost Typer compatible) ---
         settings = {
             "wpm": int(round(avg_wpm)),
             "wpm_variance": int(round(min(wpm_stdev * 2, avg_wpm * 0.4))),
             "error_rate": round(min(error_rate, 0.25), 4),
-            "correction_delay_chars_min": max(0, correction_delay_min),
+            "correction_delay_chars_min": min(12, max(0, correction_delay_min)),
             "correction_delay_chars_max": min(correction_delay_max, 12),
             "pause_frequency": round(min(pause_frequency, 0.3), 4),
-            "pause_duration_min": round(
-                min(thinking_pauses) if thinking_pauses else 0.3, 2
-            ),
-            "pause_duration_max": round(
-                statistics.quantiles(thinking_pauses, n=4)[2] if len(thinking_pauses) >= 4 else 4.0, 2
-            ),
+            "pause_duration_min": round(thinking_min, 2),
+            "pause_duration_max": round(thinking_max, 2),
             "fatigue_enabled": fatigue_detected,
             "fatigue_rate": round(fatigue_rate, 5),
             "burst_typing_enabled": burst_enabled,
