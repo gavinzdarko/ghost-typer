@@ -149,27 +149,21 @@ class VisualVerifier:
                 message="Failed to capture screenshot",
             )
 
-        # OCR the screenshot
-        extracted = self.extract_text(screenshot)
-        if extracted is None:
+        try:
+            extracted = self.extract_text(screenshot)
+            if extracted is None:
+                return VerificationResult(
+                    success=False, match_ratio=0.0, message="OCR extraction failed",
+                )
+            try:
+                match_ratio = self._compare_texts(intended_text, extracted)
+            except ValueError as exc:
+                return VerificationResult(success=False, match_ratio=0.0, message=str(exc))
+        finally:
             try:
                 screenshot.unlink()
-            except Exception:
+            except OSError:
                 pass
-            return VerificationResult(
-                success=False,
-                match_ratio=0.0,
-                message="OCR extraction failed",
-            )
-
-        # Compare texts
-        match_ratio = self._compare_texts(intended_text, extracted)
-
-        # Clean up screenshot
-        try:
-            screenshot.unlink()
-        except Exception:
-            pass
 
         success = match_ratio > 0.85  # 85% match threshold
 
@@ -184,16 +178,20 @@ class VisualVerifier:
     @staticmethod
     def _compare_texts(intended: str, extracted: str) -> float:
         """Compare two texts using sequential word matching (0.0 - 1.0)."""
-        # Normalize whitespace
-        intended_clean = " ".join(intended.split()).lower()
-        extracted_clean = " ".join(extracted.split()).lower()
-
-        if not intended_clean:
-            return 1.0 if not extracted_clean else 0.0
-
-        # Use SequenceMatcher for order-aware similarity (stdlib, no extra deps)
+        intended_words = intended.lower().split()
+        extracted_words = extracted.lower().split()
+        if intended_words == extracted_words:
+            return 1.0
+        if not intended_words or not extracted_words:
+            return 0.0
+        # Repeated words are real content. SequenceMatcher's character-level
+        # autojunk heuristic otherwise reports zero similarity for long passages
+        # with just an extra leading OCR character. Bound the worst-case work
+        # before disabling that heuristic for ordered word matching.
+        if len(intended_words) * len(extracted_words) > 4_000_000:
+            raise ValueError("OCR comparison exceeds the safe text limit; verify a smaller region")
         from difflib import SequenceMatcher
-        return SequenceMatcher(None, intended_clean, extracted_clean).ratio()
+        return SequenceMatcher(None, intended_words, extracted_words, autojunk=False).ratio()
 
 
 class VerificationResult:
