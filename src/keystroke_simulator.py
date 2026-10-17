@@ -104,7 +104,8 @@ class KeystrokeSimulator:
 
     def pause(self) -> None:
         """Pause typing — blocks until resumed."""
-        self._paused.set()
+        with self._cg_lock:
+            self._paused.set()
 
     def resume(self) -> None:
         """Resume after pause."""
@@ -123,19 +124,25 @@ class KeystrokeSimulator:
 
         Returns True if the call was made, False if stopped.
         """
-        with self._cg_lock:
-            if not self._active.is_set():
-                return False
-            try:
-                fn(*args)
-            except Exception as exc:
-                self._active.clear()
-                logger.error("Keyboard event failed; stopping typing", exc_info=True)
-                raise KeystrokeError(
-                    "Could not send a keyboard event. Check macOS Accessibility "
-                    "permission before retrying."
-                ) from exc
-        return True
+        # A pause can arrive after the caller's state check. Recheck while
+        # owning the event lock, and wait outside it so stop/resume stay usable.
+        while self._check_state():
+            with self._cg_lock:
+                if not self._active.is_set():
+                    return False
+                if self._paused.is_set():
+                    continue
+                try:
+                    fn(*args)
+                except Exception as exc:
+                    self._active.clear()
+                    logger.error("Keyboard event failed; stopping typing", exc_info=True)
+                    raise KeystrokeError(
+                        "Could not send a keyboard event. Check macOS Accessibility "
+                        "permission before retrying."
+                    ) from exc
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Primitive actions
