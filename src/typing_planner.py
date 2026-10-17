@@ -684,6 +684,10 @@ class TypingPlanner:
         rewrite_positions_list = self._pick_rewrite_positions(text, total_paste_chars)
         # Build a dict: pos -> granularity for quick lookup
         rewrite_positions: dict[int, str] = {pos: gran for pos, gran in rewrite_positions_list}
+        abandonment_words = {entry["word"].lower()
+                             for entry in self._behavioral_content.get("word_abandonments", [])}
+        abandonment_positions = {match.start() for match in re.finditer(r"\b\w+\b", text)
+                                 if match.group().lower() in abandonment_words}
 
         i = 0
         while i < len(text):
@@ -715,6 +719,8 @@ class TypingPlanner:
                 self._abandon_count += 1
                 self._char_position += abandon_entry["skip"]
                 continue
+            # A rejected candidate is consumed normally, without rerolling it.
+            abandonment_positions.discard(i)
 
             # Check for whole-word misspelling at this position
             if i in word_misspells:
@@ -754,6 +760,7 @@ class TypingPlanner:
                 and i not in mistake_positions
                 and i not in rewrite_positions
                 and i not in word_misspells
+                and i not in abandonment_positions
             ):
                 i += 1
             run_text = text[run_start:i]
@@ -1628,6 +1635,8 @@ class TypingPlanner:
         Returns {"partial": str, "replacement": str, "skip": int} or None.
         """
         cfg = self.profile.behaviors.abandonment
+        if pos and (text[pos - 1].isalnum() or text[pos - 1] == "_"):
+            return None
         if not cfg.enabled:
             return None
         if self._abandon_count >= cfg.max_per_session:
