@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from collections import OrderedDict
 from typing import Any, Optional
 
 import anthropic
@@ -489,11 +490,14 @@ class AIRewriter:
     """Uses Claude to generate plausible 'first draft' versions of text
     that a human might type before deleting and rewriting better."""
 
+    MAX_CACHE_ENTRIES = 64
+    MAX_CACHE_CHARS = 32_768
+
     def __init__(self, api_key: str | None = None, *, enabled: bool = True):
         self._api_key = (api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")) if enabled else None
         self._client: Optional[anthropic.Anthropic] = None
         self._enabled = bool(self._api_key)
-        self._cache: dict[str, str] = {}  # final_text -> draft_text
+        self._cache: OrderedDict[str, str] = OrderedDict()
 
         if self._api_key:
             try:
@@ -520,6 +524,7 @@ class AIRewriter:
 
         # Check cache
         if final_text in self._cache:
+            self._cache.move_to_end(final_text)
             return self._cache[final_text]
 
         try:
@@ -543,7 +548,7 @@ class AIRewriter:
             draft = response.content[0].text.strip()
             # Sanity check — draft should be similar length
             if 0.3 < len(draft) / max(len(final_text), 1) < 2.5:
-                self._cache[final_text] = draft
+                self._cache_draft(final_text, draft)
                 return draft
             return None
         except Exception:
@@ -572,6 +577,7 @@ class AIRewriter:
         for i, span in enumerate(spans):
             text = span.get("text", "")
             if text in self._cache:
+                self._cache.move_to_end(text)
                 results[i] = self._cache[text]
             else:
                 uncached_indices.append(i)
@@ -629,7 +635,7 @@ class AIRewriter:
                     and 0.3 < len(draft) / max(len(orig_text), 1) < 2.5
                 ):
                     results[orig_idx] = draft
-                    self._cache[orig_text] = draft
+                    self._cache_draft(orig_text, draft)
 
         except Exception:
             logger.exception("AI batch rewriter failed")
@@ -705,6 +711,16 @@ class AIRewriter:
         except Exception:
             logger.exception("AI revisit target picker failed")
             return []
+
+    def _cache_draft(self, text: str, draft: str) -> None:
+        """Keep useful recent drafts without retaining every clipboard session."""
+        if len(text) + len(draft) > self.MAX_CACHE_CHARS:
+            return
+        self._cache[text] = draft
+        self._cache.move_to_end(text)
+        while (len(self._cache) > self.MAX_CACHE_ENTRIES
+               or sum(len(k) + len(v) for k, v in self._cache.items()) > self.MAX_CACHE_CHARS):
+            self._cache.popitem(last=False)
 
     def clear_cache(self) -> None:
         """Clear the draft cache (e.g. between typing sessions)."""
