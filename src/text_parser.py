@@ -73,6 +73,13 @@ class TextParser:
         """
         soup = BeautifulSoup(html, "html.parser")
 
+        # Remove hidden subtrees before any get_text() shortcut (notably PRE)
+        # can read their descendants. Decomposition also clears descendants'
+        # attributes, so skip those entries in the original traversal snapshot.
+        for tag in soup.find_all(True):
+            if tag.attrs is not None and self._is_hidden(tag):
+                tag.decompose()
+
         # Strip tags that should always be removed
         for tag in soup.find_all(self.STRIP_TAGS):
             # Removing a head also removes its descendants; skip detached
@@ -101,6 +108,19 @@ class TextParser:
                                        "explicit_break_count")}
 
         return self._clean_segments(segments)
+
+    @staticmethod
+    def _is_hidden(node: Tag) -> bool:
+        if node.has_attr("hidden"):
+            return True
+        # Respect declaration order and !important for inline display styles.
+        displays = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)", node.get("style", ""), re.IGNORECASE)
+        important = [value for value in displays if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+        if not displays:
+            return False
+        display = (important or displays)[-1]
+        display = re.sub(r"!\s*important\s*$", "", display, flags=re.IGNORECASE).strip().lower()
+        return display == "none"
 
     def _walk_node(
         self,
