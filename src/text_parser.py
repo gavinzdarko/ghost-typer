@@ -40,8 +40,13 @@ class TextParser:
         if is_html:
             try:
                 return self._parse_html(content)
-            except Exception:
-                logger.exception("HTML parsing failed, falling back to plain text")
+            except Exception as exc:
+                # Rich clipboard input must never become literal HTML keystrokes
+                # when parsing fails (for example on an excessively nested DOM).
+                logger.exception("HTML parsing failed; refusing to type raw markup")
+                raise ValueError(
+                    "Could not parse rich clipboard text safely. Copy as plain text and retry."
+                ) from exc
 
         return self._parse_plain_text(content)
 
