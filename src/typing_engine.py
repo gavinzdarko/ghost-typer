@@ -304,11 +304,16 @@ class TypingEngine:
     def thinking_pause_duration(self) -> float:
         """Log-normal: mostly short, occasionally long."""
         p = self.profile
+        minimum = max(self.settings.pause_duration_min, p.pauses.thinking_pause_clamp_min)
+        maximum = min(self.settings.pause_duration_max, p.pauses.thinking_pause_clamp_max)
+        if minimum > maximum:
+            # An AI persona cannot override an explicitly configured interval.
+            minimum, maximum = self.settings.pause_duration_range
         return max(
-            p.pauses.thinking_pause_clamp_min,
+            minimum,
             min(
                 self._rng.lognormvariate(p.pauses.thinking_pause_lognormal_mu, p.pauses.thinking_pause_lognormal_sigma),
-                p.pauses.thinking_pause_clamp_max,
+                maximum,
             ),
         )
 
