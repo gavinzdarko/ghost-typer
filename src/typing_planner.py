@@ -1361,6 +1361,13 @@ class TypingPlanner:
     # Feature 1/2: Word speed + capitalization difficulty
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _word_speed_key(word: str) -> str:
+        # Whitespace tokenization retains sentence punctuation and quotation
+        # marks. Remove those wrappers for lookup, never from the emitted text.
+        # Keep symbols such as + and # significant for terms like C++ and C#.
+        return word.lower().strip(".,!?;:()[]{}<>\"'“”‘’«»…—–")
+
     def _get_word_speed(self, word: str) -> float:
         """Look up per-word speed multiplier from behavioral_content.
 
@@ -1376,10 +1383,10 @@ class TypingPlanner:
                         factor = float(entry.get("multiplier", 1.0))
                     except (TypeError, ValueError):
                         factor = 1.0
-                    self._word_speed_cache[w.lower()] = (
+                    self._word_speed_cache[self._word_speed_key(w)] = (
                         factor if math.isfinite(factor) and 0.1 <= factor <= 10.0 else 1.0
                     )
-        return self._word_speed_cache.get(word.lower(), 1.0)
+        return self._word_speed_cache.get(self._word_speed_key(word), 1.0)
 
     def _build_word_speed_actions(self, run_text: str) -> list[TypingAction]:
         """Split a run of text into word-boundary segments with per-word speed.
