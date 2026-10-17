@@ -19,7 +19,7 @@ import rumps
 from .hotkey_listener import HotkeyListener
 from .orchestrator import Orchestrator, OrchestratorState
 from .progress_overlay import ProgressOverlay
-from .settings_ui import load_settings_dict, save_settings_dict
+from .settings_ui import load_settings_dict, save_settings_dict, parse_numeric_setting
 
 logger = logging.getLogger(__name__)
 
@@ -217,10 +217,13 @@ class GhostTyperApp(rumps.App):
             response = window.run()
             if response.clicked:
                 try:
-                    new_val = typ(response.text.strip().rstrip('%').rstrip('s'))
-                    self._settings_dict[key] = new_val
-                    save_settings_dict(self._settings_dict)
-                    self.orchestrator.update_settings(self._settings_dict)
+                    new_val = parse_numeric_setting(key, response.text)
+                    candidate = {**self._settings_dict, key: new_val}
+                    if candidate.get("pause_duration_min", 0.3) > candidate.get("pause_duration_max", 4.0):
+                        raise ValueError("Pause minimum must not exceed maximum")
+                    save_settings_dict(candidate)
+                    self._settings_dict = candidate
+                    self.orchestrator.update_settings(candidate)
 
                     # Update menu item title
                     item, fn, display_name = self._setting_items[key]
