@@ -467,10 +467,17 @@ class GhostTyperApp(rumps.App):
         """Update menu bar status and floating progress overlay."""
         if total_chars <= 0:
             return
+        snapshot = self.orchestrator.state_snapshot
+        if snapshot[0] != OrchestratorState.TYPING:
+            return
         pct = min(100, int(chars_typed / total_chars * 100))
-        remaining = total_chars - chars_typed
+        remaining = max(0, total_chars - chars_typed)
 
         def _update():
+            # GUI callbacks can wait behind a modal menu/dialog. Do not let
+            # progress from an earlier transition overwrite idle or a new session.
+            if self.orchestrator.state_snapshot != snapshot:
+                return
             self._status_item.title = f"Status: Typing... {pct}% ({remaining} left)"
             self._progress_overlay.update(chars_typed, total_chars, start_time, estimated_total)
         self._run_on_main(_update)
