@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import tempfile
 from pathlib import Path
 from typing import Callable, Optional
+
+from .models import Settings
 
 try:
     import tkinter as tk
@@ -60,9 +63,24 @@ def load_settings_dict() -> dict:
         try:
             with open(SETTINGS_FILE, "r") as f:
                 saved = json.load(f)
-            settings.update(saved)
+            if isinstance(saved, dict):
+                settings.update(saved)
         except Exception:
             logger.exception("Failed to load settings file, using defaults")
+    # The menu and API-key resolver consume this dictionary before constructing
+    # an engine. Normalize here too so malformed persisted values cannot crash
+    # the menu or accidentally enable a feature through string truthiness.
+    settings.update(Settings.from_dict(settings).to_dict())
+    for key in ("ai_enabled", "sound_enabled", "verify_after_typing"):
+        if not isinstance(settings[key], bool):
+            settings[key] = DEFAULTS[key]
+    for key in ("anthropic_api_key", "webhook_url"):
+        if not isinstance(settings[key], str):
+            settings[key] = DEFAULTS[key]
+    delay = settings["start_delay"]
+    if (not isinstance(delay, (int, float)) or isinstance(delay, bool)
+            or not 0 <= delay <= 3600 or not math.isfinite(delay)):
+        settings["start_delay"] = DEFAULTS["start_delay"]
     return settings
 
 
