@@ -352,20 +352,23 @@ class TextParser:
 
         # Merge adjacent text segments into larger plain-text chunks.
         merged: list[TextSegment] = []
+        inline_parts: list[str] = []
+
+        def flush_inline() -> None:
+            if inline_parts:
+                # Join and normalize each inline run once. Repeatedly joining
+                # the growing prefix rescans quadratic amounts of clipboard text.
+                merged.append(TextSegment(text=re.sub(r" +", " ", "".join(inline_parts)), formatting={}))
+                inline_parts.clear()
+
         for seg in cleaned:
             is_break = seg.formatting.get("paragraph_break") or seg.formatting.get("linebreak")
             if is_break or seg.formatting.get("preformatted"):
+                flush_inline()
                 merged.append(seg)
                 continue
-
-            # If previous segment is also inline text, merge them
-            if merged and not merged[-1].formatting.get("preformatted") and not merged[-1].formatting.get("paragraph_break") and not merged[-1].formatting.get("linebreak"):
-                prev = merged[-1]
-                # Inline boundaries have no implied spaces. Keep the DOM's
-                # actual whitespace and collapse it across adjacent nodes.
-                prev.text = re.sub(r" +", " ", prev.text + seg.text)
-            else:
-                merged.append(TextSegment(text=seg.text, formatting={}))
+            inline_parts.append(seg.text)
+        flush_inline()
 
         # HTML whitespace at block edges does not produce visible content.
         for i, seg in enumerate(merged):
