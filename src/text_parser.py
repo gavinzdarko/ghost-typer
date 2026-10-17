@@ -333,7 +333,10 @@ class TextParser:
             ):
                 explicit = cleaned[-1].formatting.get("explicit_break_count", 0) + seg.formatting.get("explicit_break_count", 0)
                 if explicit:
-                    cleaned[-1].text = "\n" * max(explicit, len(cleaned[-1].text), len(seg.text))
+                    # Keep only the largest structural separator here. Building
+                    # the growing explicit BR string on every tag is quadratic.
+                    if len(seg.text) > len(cleaned[-1].text):
+                        cleaned[-1].text = seg.text
                     cleaned[-1].formatting = {"linebreak": True, "explicit_break_count": explicit}
                     continue
                 # Keep the stronger break (paragraph > linebreak)
@@ -384,6 +387,7 @@ class TextParser:
         # explicit BR elements remain actual user-visible newlines.
         for index, seg in enumerate(merged):
             explicit = seg.formatting.pop("explicit_break_count", 0)
-            if explicit and index in (0, len(merged) - 1):
-                seg.text = "\n" * explicit
+            if explicit:
+                count = explicit if index in (0, len(merged) - 1) else max(explicit, len(seg.text))
+                seg.text = "\n" * count
         return [seg for seg in merged if seg.text]
