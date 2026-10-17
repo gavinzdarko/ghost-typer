@@ -31,6 +31,8 @@ from .human_errors import HumanErrors
 from .typing_engine import TypingEngine
 from .planned_text import PlannedText, replace_known_span
 
+_WORD_RE = re.compile(r"\w+")
+
 # Google Docs keyboard shortcuts (macOS)
 FORMAT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "bold": ("cmd", "b"),
@@ -185,6 +187,7 @@ class TypingPlanner:
         self._abandon_count = 0
         self._restructure_count = 0
         self._autocorrect_count = 0
+        self._autocorrect_attempts = 0
         self._distraction_count = 0
         self._chars_since_distraction = 0
         self._word_speed_cache: dict[str, float] | None = None
@@ -258,6 +261,7 @@ class TypingPlanner:
         self._abandon_count = 0
         self._restructure_count = 0
         self._autocorrect_count = 0
+        self._autocorrect_attempts = 0
         self._distraction_count = 0
         self._chars_since_distraction = 0
         self._word_speed_cache: dict[str, float] | None = None
@@ -685,9 +689,18 @@ class TypingPlanner:
         rewrite_positions_list = self._pick_rewrite_positions(text, total_paste_chars)
         # Build a dict: pos -> granularity for quick lookup
         rewrite_positions: dict[int, str] = {pos: gran for pos, gran in rewrite_positions_list}
+        abandonment_cfg = self.profile.behaviors.abandonment
+        abandonment_words = ({entry["word"].lower()
+                              for entry in self._behavioral_content.get("word_abandonments", [])}
+                             if abandonment_cfg.enabled and abandonment_cfg.probability_per_word > 0
+                             and self._abandon_count < abandonment_cfg.max_per_session else set())
+        abandonment_positions = {match.start() for match in re.finditer(r"\b\w+\b", text)
+                                 if match.group().lower() in abandonment_words}
 
         i = 0
         while i < len(text):
+            if self._abandon_count >= abandonment_cfg.max_per_session:
+                abandonment_positions.clear()
             # Check for rewrite at this word boundary
             if i in rewrite_positions:
                 granularity = rewrite_positions[i]
@@ -716,6 +729,8 @@ class TypingPlanner:
                 self._abandon_count += 1
                 self._char_position += abandon_entry["skip"]
                 continue
+            # A rejected candidate is consumed normally, without rerolling it.
+            abandonment_positions.discard(i)
 
             # Check for whole-word misspelling at this position
             if i in word_misspells:
@@ -755,6 +770,7 @@ class TypingPlanner:
                 and i not in mistake_positions
                 and i not in rewrite_positions
                 and i not in word_misspells
+                and i not in abandonment_positions
             ):
                 i += 1
             run_text = text[run_start:i]
@@ -1629,7 +1645,9 @@ class TypingPlanner:
         Returns {"partial": str, "replacement": str, "skip": int} or None.
         """
         cfg = self.profile.behaviors.abandonment
-        if not cfg.enabled:
+        if pos and (text[pos - 1].isalnum() or text[pos - 1] == "_"):
+            return None
+        if not cfg.enabled or cfg.probability_per_word <= 0:
             return None
         if self._abandon_count >= cfg.max_per_session:
             return None
@@ -1639,7 +1657,7 @@ class TypingPlanner:
             return None
 
         # Extract the word at this position
-        match = re.match(r"\w+", text[pos:])
+        match = _WORD_RE.match(text, pos)
         if not match:
             return None
         current_word = match.group(0)
@@ -1823,7 +1841,7 @@ class TypingPlanner:
     def _track_autocorrect_words(self, run_text: str, actions: list[TypingAction]) -> None:
         """Defer verified, unique emitted words; AI offsets never select text."""
         cfg = self.profile.behaviors.autocorrect
-        if not cfg.enabled or self._autocorrect_count >= cfg.max_per_session:
+        if not cfg.enabled or self._autocorrect_attempts >= cfg.max_per_session:
             return
         words = list(re.finditer(r"\b\w+\b", run_text))
         for pending in self._pending_autocorrects:
@@ -1841,9 +1859,14 @@ class TypingPlanner:
                     break
         still_pending = []
         for pending in self._pending_autocorrects:
+            if self._autocorrect_attempts >= cfg.max_per_session:
+                break
             if pending["words_remaining"] > 0:
                 still_pending.append(pending)
                 continue
+            # Rejected ambiguous or distant edits also consume work. Otherwise
+            # repeated candidates replay and search every growing chunk prefix.
+            self._autocorrect_attempts += 1
             state = PlannedText(self._chunk_prefix).apply(actions)
             edits = self._build_autocorrect_fix(
                 pending["word"], pending["correct"],
