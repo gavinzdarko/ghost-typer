@@ -93,7 +93,8 @@ class TextParser:
         for seg in segments:
             seg.formatting = {k: v for k, v in seg.formatting.items()
                               if k in ("paragraph_break", "linebreak", "list_type",
-                                       "list_index", "list_prefix", "heading_level", "preformatted")}
+                                       "list_index", "list_prefix", "heading_level", "preformatted",
+                                       "explicit_break_count")}
 
         return self._clean_segments(segments)
 
@@ -170,7 +171,7 @@ class TextParser:
 
         # Line break
         if tag == "br":
-            segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+            segments.append(TextSegment(text="\n", formatting={"linebreak": True, "explicit_break_count": 1}))
             return
 
         # Horizontal rule
@@ -330,6 +331,14 @@ class TextParser:
                 and cleaned
                 and (cleaned[-1].formatting.get("paragraph_break") or cleaned[-1].formatting.get("linebreak"))
             ):
+                explicit = cleaned[-1].formatting.get("explicit_break_count", 0) + seg.formatting.get("explicit_break_count", 0)
+                if explicit:
+                    # Keep only the largest structural separator here. Building
+                    # the growing explicit BR string on every tag is quadratic.
+                    if len(seg.text) > len(cleaned[-1].text):
+                        cleaned[-1].text = seg.text
+                    cleaned[-1].formatting = {"linebreak": True, "explicit_break_count": explicit}
+                    continue
                 # Keep the stronger break (paragraph > linebreak)
                 if seg.formatting.get("paragraph_break") and (not cleaned[-1].formatting.get("paragraph_break") or len(seg.text) > len(cleaned[-1].text)):
                     cleaned[-1] = seg
@@ -338,7 +347,7 @@ class TextParser:
             cleaned.append(seg)
 
         # Strip leading/trailing whitespace-only segments
-        while cleaned and cleaned[0].text.strip() == "" and cleaned[0].formatting.get("paragraph_break"):
+        while cleaned and cleaned[0].text.strip() == "" and cleaned[0].formatting.get("paragraph_break") and not cleaned[0].formatting.get("explicit_break_count"):
             cleaned.pop(0)
         while (cleaned and not cleaned[-1].text.strip()
                and not cleaned[-1].formatting.get("preformatted")
@@ -374,4 +383,11 @@ class TextParser:
                     seg.text = seg.text.lstrip(" ")
                 if i == len(merged) - 1 or merged[i + 1].formatting.get("paragraph_break") or merged[i + 1].formatting.get("linebreak"):
                     seg.text = seg.text.rstrip(" ")
+        # Generated block separators disappear at the document edges, while
+        # explicit BR elements remain actual user-visible newlines.
+        for index, seg in enumerate(merged):
+            explicit = seg.formatting.pop("explicit_break_count", 0)
+            if explicit:
+                count = explicit if index in (0, len(merged) - 1) else max(explicit, len(seg.text))
+                seg.text = "\n" * count
         return [seg for seg in merged if seg.text]
