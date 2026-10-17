@@ -60,7 +60,7 @@ class TextParser:
         return segments
 
     # Tags whose content should be removed entirely
-    STRIP_TAGS = {"script", "style", "noscript", "svg", "math"}
+    STRIP_TAGS = {"script", "style", "noscript", "svg", "math", "head", "title", "meta", "link", "base"}
 
     # Regex for citation-like <sup> content: [1], [a], [1][2], [edit], etc.
     _SUP_CITATION_RE = re.compile(r"^\s*\[[\d\w,\s]+\]\s*$")
@@ -75,6 +75,10 @@ class TextParser:
 
         # Strip tags that should always be removed
         for tag in soup.find_all(self.STRIP_TAGS):
+            # Removing a head also removes its descendants; skip detached
+            # metadata instead of trying to replace it a second time.
+            if tag.parent is None:
+                continue
             tag.replace_with(" ")
 
         # Strip citation <sup> tags specifically (preserve legitimate superscripts like x²)
