@@ -10,6 +10,7 @@ import math
 import random
 import re
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 
 from .models import (
     AbandonWord,
@@ -339,6 +340,7 @@ class TypingPlanner:
         # --- Apply human errors (grammar, punctuation, spelling that stay in) ---
         if self.settings.grammar_error_rate > 0 or self.settings.punctuation_error_rate > 0:
             modified_text, misspellings = self._human_errors.process_text(segment.text)
+            self._remap_source_annotations(segment.text, modified_text, self._char_position)
             # Preserve the validated occurrence, rather than redirecting a typo
             # to the first case-insensitive match elsewhere in the paragraph.
             misspell_by_position = {pos: (wrong, correct) for wrong, correct, pos in misspellings}
@@ -434,6 +436,69 @@ class TypingPlanner:
         # --- No formatting to untoggle (plain text mode) ---
 
         return actions, char_count
+
+    def _remap_source_annotations(self, original: str, modified: str, start: int) -> None:
+        """Keep source annotations aligned when sparse grammar edits change length.
+
+        Offsets beyond this segment shift together. A boundary inside replaced
+        text has no reliable target and is discarded instead of moving a quote
+        or thinking pause onto an unrelated word.
+        """
+        if original == modified:
+            return
+        prefix = 0
+        limit = min(len(original), len(modified))
+        while prefix < limit and original[prefix] == modified[prefix]:
+            prefix += 1
+        suffix = 0
+        while (suffix < limit - prefix
+               and original[-suffix - 1] == modified[-suffix - 1]):
+            suffix += 1
+        before = original[prefix:len(original) - suffix]
+        after = modified[prefix:len(modified) - suffix]
+        # SequenceMatcher can take quadratic time on repetitive changes. Losing
+        # optional positional effects is preferable to blocking a large paste.
+        if len(before) * len(after) > 1_000_000:
+            for key in ("quote_ranges", "composition_annotations"):
+                if key in self._behavioral_content:
+                    self._behavioral_content[key] = [e for e in self._behavioral_content[key] if e["end"] <= start]
+            if "distraction_points" in self._behavioral_content:
+                self._behavioral_content["distraction_points"] = [e for e in self._behavioral_content["distraction_points"] if e["position"] < start]
+            self._thought_boundaries = {p for p in self._thought_boundaries if p < start}
+            return
+        blocks = [(0, 0, prefix),
+                  *((a + prefix, b + prefix, size) for a, b, size in
+                    SequenceMatcher(None, before, after, autojunk=True).get_matching_blocks() if size),
+                  (len(original) - suffix, len(modified) - suffix, suffix)]
+        delta = len(modified) - len(original)
+
+        def remap(position, *, end=False):
+            local = position - start
+            if local < 0:
+                return position
+            if local >= len(original):
+                return position + delta
+            for old_start, new_start, size in blocks:
+                inside = (old_start < local <= old_start + size) if end else (old_start <= local < old_start + size)
+                if inside:
+                    return start + new_start + local - old_start
+            return None
+
+        for key in ("quote_ranges", "composition_annotations"):
+            mapped = []
+            for entry in self._behavioral_content.get(key, []):
+                lo, hi = remap(entry["start"]), remap(entry["end"], end=True)
+                if lo is not None and hi is not None and lo < hi:
+                    mapped.append({**entry, "start": lo, "end": hi})
+            if key in self._behavioral_content:
+                self._behavioral_content[key] = mapped
+        if "distraction_points" in self._behavioral_content:
+            self._behavioral_content["distraction_points"] = [
+                {**entry, "position": position}
+                for entry in self._behavioral_content["distraction_points"]
+                if (position := remap(entry["position"])) is not None]
+        self._thought_boundaries = {position for boundary in self._thought_boundaries
+                                    if (position := remap(boundary)) is not None}
 
     def _plan_segment_simple(self, segment: TextSegment) -> tuple[list[TypingAction], int]:
         """Simple planning: just type the text with realistic timing and basic typos.
