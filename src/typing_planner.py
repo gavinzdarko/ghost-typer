@@ -378,7 +378,8 @@ class TypingPlanner:
             restructured = False
             if self._should_restructure(chunk.text):
                 restructure_entry = self._find_restructure_match(chunk.text)
-                if restructure_entry:
+                if (restructure_entry and self._rng.random()
+                        < self.profile.behaviors.restructuring.probability_per_sentence):
                     first_draft = restructure_entry["first_draft"]
                     # Type the first draft
                     actions.append(TypeText(text=first_draft))
@@ -1651,6 +1652,8 @@ class TypingPlanner:
                 replacement = entry.get("replacement", current_word)
                 if abandon_after < 1 or abandon_after >= len(current_word):
                     continue
+                if self._rng.random() >= cfg.probability_per_word:
+                    return None
                 return {
                     "partial": current_word[:abandon_after],
                     "replacement": replacement,
@@ -1829,7 +1832,8 @@ class TypingPlanner:
             for fix in self._behavioral_content.get("autocorrect_fixes", []):
                 word, correct = match.group(), fix.get("correct", "")
                 if fix.get("word") == word and correct and correct != word:
-                    if not any(p["word"] == word for p in self._pending_autocorrects):
+                    if (not any(p["word"] == word for p in self._pending_autocorrects)
+                            and self._rng.random() < cfg.probability_per_word):
                         self._pending_autocorrects.append({
                             "word": word, "correct": correct,
                             "words_remaining": self._rng.randint(cfg.min_words_back, cfg.max_words_back) - (len(words) - idx - 1),
