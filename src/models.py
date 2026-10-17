@@ -816,4 +816,47 @@ class Settings:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Settings:
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        """Load persisted settings without letting malformed values break typing."""
+        defaults = cls()
+        if not isinstance(data, dict):
+            return defaults
+        values = {}
+        for spec in fields(defaults):
+            key = spec.name
+            value = data.get(key, getattr(defaults, key))
+            default = getattr(defaults, key)
+            if isinstance(default, bool):
+                valid = isinstance(value, bool)
+            else:
+                valid = _profile_number(value, integer=isinstance(default, int))
+                lower, upper = 0, 3600
+                if key == "wpm":
+                    lower, upper = 1, 1000
+                elif key == "wpm_variance":
+                    upper = 1000
+                elif key == "rewrite_scaling_chars":
+                    lower, upper = 1, 1_000_000
+                elif "probability" in key or key.endswith("_rate") or key == "pause_frequency":
+                    upper = 1
+                elif "multiplier" in key:
+                    lower, upper = .05, 10
+                elif key.endswith("_weight"):
+                    upper = 10_000
+                elif key in {"rewrite_max_repeats", "revisit_max_per_session"}:
+                    upper = 100
+                if valid:
+                    valid = lower <= value <= upper
+            values[key] = value if valid else default
+        for low, high in (("correction_delay_chars_min", "correction_delay_chars_max"),
+                          ("pause_duration_min", "pause_duration_max"),
+                          ("burst_length_min", "burst_length_max"),
+                          ("sentence_pause_min", "sentence_pause_max"),
+                          ("paragraph_pause_min", "paragraph_pause_max")):
+            if values[low] > values[high]:
+                values[low], values[high] = getattr(defaults, low), getattr(defaults, high)
+        weights = ("rewrite_word_weight", "rewrite_sentence_weight", "rewrite_paragraph_weight")
+        if not sum(values[key] for key in weights):
+            for key in weights:
+                values[key] = getattr(defaults, key)
+        values["rewrite_base_probability"] = min(values["rewrite_base_probability"], values["rewrite_max_probability"])
+        return cls(**values)
