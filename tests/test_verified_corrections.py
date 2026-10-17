@@ -7,6 +7,7 @@ def planner():
     p = TypingPlanner()
     p.profile.behaviors.final_proofread.probability = 1
     p.profile.behaviors.final_proofread.min_text_length = 0
+    p.profile.behaviors.autocorrect.probability_per_word = 1
     return p
 
 

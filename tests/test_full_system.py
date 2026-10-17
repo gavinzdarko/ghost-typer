@@ -1046,6 +1046,7 @@ def test_word_abandonment():
                                      grammar_error_rate=0.0, punctuation_error_rate=0.0,
                                      rewrite_base_probability=0.0, rewrite_max_probability=0.0))
     planner.seed(42)
+    planner.profile.behaviors.abandonment.probability_per_word = 1
     behavioral = {
         "word_abandonments": [
             {"word": "approximately", "abandon_after_chars": 6, "replacement": "about"},
@@ -1066,6 +1067,7 @@ def test_sentence_restructuring():
     planner = TypingPlanner(Settings(error_rate=0.0, false_alarm_rate=0.0,
                                      grammar_error_rate=0.0, punctuation_error_rate=0.0))
     planner.seed(42)
+    planner.profile.behaviors.restructuring.probability_per_sentence = 1
     text = "The experiment showed interesting results."
     behavioral = {
         "sentence_restructures": [
