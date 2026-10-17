@@ -1,4 +1,5 @@
 import pytest
+import json
 
 from src.models import Settings
 from src.typing_engine import TypingEngine
@@ -31,3 +32,31 @@ def test_valid_settings_round_trip_and_zero_probabilities_are_preserved():
                         rewrite_max_probability=0, rewrite_base_probability=0)
     assert Settings.from_dict({**settings.to_dict(), "future_setting": 10}) == settings
     assert Settings.from_dict({"rewrite_max_probability": 0}).rewrite_base_probability == 0
+
+
+def test_disk_loader_normalizes_values_before_menu_and_key_resolution(monkeypatch, tmp_path):
+    from src import settings_ui
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_ui, "SETTINGS_FILE", path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "environment-key")
+    path.write_text(json.dumps({"wpm": "bad", "error_rate": None, "start_delay": float("inf"),
+        "ai_enabled": "false", "sound_enabled": [], "verify_after_typing": 1,
+        "anthropic_api_key": None, "webhook_url": 2, "burst_length_max": 22,
+        "future_setting": {"valid": True}}))
+    loaded = settings_ui.load_settings_dict()
+    assert loaded["wpm"] == Settings().wpm
+    assert f"{loaded['error_rate']:.1%}"
+    for key in ("start_delay", "ai_enabled", "sound_enabled", "verify_after_typing", "anthropic_api_key", "webhook_url"):
+        assert loaded[key] == settings_ui.DEFAULTS[key]
+    assert settings_ui.get_api_key() == "environment-key"
+    assert loaded["burst_length_max"] == 22
+    assert loaded["future_setting"] == {"valid": True}
+
+
+@pytest.mark.parametrize("saved", [[], None, "invalid", {"start_delay": True}])
+def test_bad_top_level_json_and_boolean_delay_keep_startup_defaults(saved, monkeypatch, tmp_path):
+    from src import settings_ui
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(saved))
+    monkeypatch.setattr(settings_ui, "SETTINGS_FILE", path)
+    assert settings_ui.load_settings_dict()["start_delay"] == settings_ui.DEFAULTS["start_delay"]
