@@ -4,9 +4,11 @@ from src.typing_planner import TypingPlanner
 
 
 def offline_planner():
-    return TypingPlanner(Settings(error_rate=0, grammar_error_rate=0,
+    planner = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0,
         punctuation_error_rate=0, false_alarm_rate=0, rewrite_max_probability=0,
         rewrite_base_probability=0, proofread_probability=1))
+    planner.profile.behaviors.autocorrect.probability_per_word = 1
+    return planner
 
 
 def test_autocorrect_length_change_cannot_retarget_pending_typo():
