@@ -149,27 +149,21 @@ class VisualVerifier:
                 message="Failed to capture screenshot",
             )
 
-        # OCR the screenshot
-        extracted = self.extract_text(screenshot)
-        if extracted is None:
+        try:
+            extracted = self.extract_text(screenshot)
+            if extracted is None:
+                return VerificationResult(
+                    success=False, match_ratio=0.0, message="OCR extraction failed",
+                )
+            try:
+                match_ratio = self._compare_texts(intended_text, extracted)
+            except ValueError as exc:
+                return VerificationResult(success=False, match_ratio=0.0, message=str(exc))
+        finally:
             try:
                 screenshot.unlink()
-            except Exception:
+            except OSError:
                 pass
-            return VerificationResult(
-                success=False,
-                match_ratio=0.0,
-                message="OCR extraction failed",
-            )
-
-        # Compare texts
-        match_ratio = self._compare_texts(intended_text, extracted)
-
-        # Clean up screenshot
-        try:
-            screenshot.unlink()
-        except Exception:
-            pass
 
         success = match_ratio > 0.85  # 85% match threshold
 
@@ -183,17 +177,33 @@ class VisualVerifier:
 
     @staticmethod
     def _compare_texts(intended: str, extracted: str) -> float:
-        """Compare two texts using sequential word matching (0.0 - 1.0)."""
-        # Normalize whitespace
-        intended_clean = " ".join(intended.split()).lower()
-        extracted_clean = " ".join(extracted.split()).lower()
-
-        if not intended_clean:
-            return 1.0 if not extracted_clean else 0.0
-
-        # Use SequenceMatcher for order-aware similarity (stdlib, no extra deps)
+        """Compare normalized text with bounded, ordered character matching."""
+        intended_clean = " ".join(intended.lower().split())
+        extracted_clean = " ".join(extracted.lower().split())
+        if intended_clean == extracted_clean:
+            return 1.0
+        if not intended_clean or not extracted_clean:
+            return 0.0
+        # Trim shared edges first: nearly identical long passages and leading
+        # OCR noise need only linear work, even when their words repeat.
+        prefix = 0
+        limit = min(len(intended_clean), len(extracted_clean))
+        while prefix < limit and intended_clean[prefix] == extracted_clean[prefix]:
+            prefix += 1
+        suffix = 0
+        while (suffix < limit - prefix
+               and intended_clean[-suffix - 1] == extracted_clean[-suffix - 1]):
+            suffix += 1
+        before = intended_clean[prefix:len(intended_clean) - suffix]
+        after = extracted_clean[prefix:len(extracted_clean) - suffix]
+        if len(before) * len(after) > 4_000_000:
+            raise ValueError("OCR comparison exceeds the safe text limit; verify a smaller region")
         from difflib import SequenceMatcher
-        return SequenceMatcher(None, intended_clean, extracted_clean).ratio()
+        # Keep small within-word/punctuation OCR errors proportional to their
+        # character count; word equality made a missing comma fail a short line.
+        matched = prefix + suffix + sum(block.size for block in
+            SequenceMatcher(None, before, after, autojunk=False).get_matching_blocks())
+        return 2.0 * matched / (len(intended_clean) + len(extracted_clean))
 
 
 class VerificationResult:
