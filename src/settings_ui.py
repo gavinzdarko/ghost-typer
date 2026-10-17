@@ -56,6 +56,36 @@ DEFAULTS = {
 }
 
 
+def parse_numeric_setting(key: str, text: str) -> int | float:
+    """Parse menu values in their displayed units and reject unsafe inputs."""
+    limits = {
+        "wpm": (10, 300), "error_rate": (0, 1),
+        "start_delay": (0, 60), "pause_frequency": (0, 1),
+        "pause_duration_min": (0, 60), "pause_duration_max": (0, 60),
+    }
+    raw = text.strip().lower()
+    percent = raw.endswith("%")
+    if percent:
+        if key not in {"error_rate", "pause_frequency"}:
+            raise ValueError("Percent units require a rate")
+        raw = raw[:-1].strip()
+    elif raw.endswith("s"):
+        if key not in {"start_delay", "pause_duration_min", "pause_duration_max"}:
+            raise ValueError("Seconds require a duration")
+        raw = raw[:-1].strip()
+    value = float(raw)
+    if percent:
+        value /= 100
+    low, high = limits[key]
+    if not math.isfinite(value) or not low <= value <= high:
+        raise ValueError(f"Value must be between {low} and {high}")
+    if key == "wpm":
+        if not value.is_integer():
+            raise ValueError("WPM must be an integer")
+        return int(value)
+    return value
+
+
 def load_settings_dict() -> dict:
     """Load settings from disk, falling back to defaults."""
     settings = dict(DEFAULTS)
