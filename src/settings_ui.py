@@ -257,7 +257,9 @@ class SettingsWindow:
 
     def _gather_settings(self) -> dict:
         """Collect current widget values into a settings dict."""
-        settings = {}
+        # Controls expose only part of the configuration. Keep advanced and
+        # future settings, including values changed since the window opened.
+        settings = load_settings_dict()
         for key, var in self._vars.items():
             val = var.get()
             # Round floating-point slider values to avoid noise
