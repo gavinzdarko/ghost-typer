@@ -1525,19 +1525,24 @@ class TypingPlanner:
 
         # Merge adjacent TypeText actions with the same speed_multiplier for efficiency
         merged: list[TypingAction] = []
+        pending: list[str] = []
+        pending_speed = 1.0
+
+        def flush():
+            if pending:
+                merged.append(TypeText(text="".join(pending), speed_multiplier=pending_speed))
+                pending.clear()
+
         for action in actions:
-            if (
-                merged
-                and isinstance(action, TypeText)
-                and isinstance(merged[-1], TypeText)
-                and action.speed_multiplier == merged[-1].speed_multiplier
-            ):
-                merged[-1] = TypeText(
-                    text=merged[-1].text + action.text,
-                    speed_multiplier=action.speed_multiplier,
-                )
+            if isinstance(action, TypeText):
+                if pending and action.speed_multiplier != pending_speed:
+                    flush()
+                pending_speed = action.speed_multiplier
+                pending.append(action.text)
             else:
+                flush()
                 merged.append(action)
+        flush()
 
         return merged if merged else [TypeText(text=run_text)]
 
