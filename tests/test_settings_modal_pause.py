@@ -1,5 +1,5 @@
 import ast
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -56,3 +56,15 @@ def test_dialog_failure_restores_only_the_owned_pause():
     with pytest.raises(RuntimeError):
         modal_method()(target, window)
     target.orchestrator.resume.assert_called_once()
+
+
+def test_paste_that_wins_the_clipboard_lock_blocks_modal_opening():
+    target = app(OrchestratorState.IDLE)
+    @contextmanager
+    def pending_paste():
+        target.orchestrator.state = OrchestratorState.PLANNING
+        yield
+    target.orchestrator.clipboard_monitor.suspended.side_effect = pending_paste
+    window = Mock()
+    assert modal_method()(target, window) is None
+    window.run.assert_not_called()

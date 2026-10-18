@@ -237,23 +237,25 @@ class GhostTyperApp(rumps.App):
 
     def _run_settings_window(self, window):
         """Keep synthetic keys and clipboard capture outside modal settings."""
-        state = self.orchestrator.state
-        if state in (OrchestratorState.PLANNING, OrchestratorState.VERIFYING):
-            self.orchestrator.notification_service.notify_error(
-                "Wait for planning or verification to finish before opening settings."
-            )
-            return None
-        simulator = self.orchestrator._simulator
-        resume_after = state == OrchestratorState.TYPING and simulator is not None
-        if resume_after:
-            self.orchestrator.pause()
-        try:
-            with self.orchestrator.clipboard_monitor.suspended():
+        # Capture the state after excluding clipboard callbacks: a paste that
+        # won this lock may already have launched planning and must be noticed.
+        with self.orchestrator.clipboard_monitor.suspended():
+            state = self.orchestrator.state
+            if state in (OrchestratorState.PLANNING, OrchestratorState.VERIFYING):
+                self.orchestrator.notification_service.notify_error(
+                    "Wait for planning or verification to finish before opening settings."
+                )
+                return None
+            simulator = self.orchestrator._simulator
+            resume_after = state == OrchestratorState.TYPING and simulator is not None
+            if resume_after:
+                self.orchestrator.pause()
+            try:
                 return window.run()
-        finally:
-            if (resume_after and self.orchestrator._simulator is simulator
-                    and self.orchestrator.state == OrchestratorState.PAUSED):
-                self.orchestrator.resume()
+            finally:
+                if (resume_after and self.orchestrator._simulator is simulator
+                        and self.orchestrator.state == OrchestratorState.PAUSED):
+                    self.orchestrator.resume()
 
     def _make_toggle_callback(self, key: str):
         """Create a callback that toggles a boolean setting."""
