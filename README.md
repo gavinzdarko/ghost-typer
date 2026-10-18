@@ -38,7 +38,7 @@ the Tesseract executable). Development checks use `pip3 install '.[dev]'`.
 
 You have three options (checked in this order):
 
-1. **Settings UI** — click the menu bar icon > Settings > enter your key in the API Key field
+1. **Settings UI** — click the menu bar icon > Settings > Anthropic API Key. The masked field starts blank; Save replaces the saved key, and saving blank clears it so the environment key is used. Cancel keeps the current key.
 2. **`.env` file** — create a `.env` file in the project root:
    ```
    ANTHROPIC_API_KEY=sk-ant-...
@@ -87,6 +87,9 @@ Configurable from the menu bar:
 | Burst Typing | On | Speed variation within words |
 | AI Planning | On | AI-generated typing profiles |
 | Sound | On | Notification sounds |
+| Verify After Typing (OCR) | Off | Verify output with the optional OCR dependencies |
+| Anthropic API Key | Empty | Replace or clear the saved key with masked native input |
+| Notification Webhook | Empty | Replace or clear the HTTP/HTTPS notification destination |
 
 ## License
 
