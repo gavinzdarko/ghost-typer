@@ -36,7 +36,8 @@ def test_rejected_menu_value_does_not_mutate_or_persist_settings():
     exec(compile(ast.Module(body=[method], type_ignores=[]), "<menu>", "exec"), scope)
     scope["rumps"].Window.return_value.run.return_value = SimpleNamespace(clicked=True, text="5s")
     settings = {"pause_duration_min": .3, "pause_duration_max": 4}
-    app = SimpleNamespace(_settings_dict=settings.copy(), orchestrator=Mock())
+    app = SimpleNamespace(_settings_dict=settings.copy(), orchestrator=Mock(),
+                          _run_settings_window=lambda window: window.run())
     callback = scope["_make_numeric_callback"](app, "pause_duration_min", "Pause Min", float, str)
     callback(None)
     assert app._settings_dict == settings

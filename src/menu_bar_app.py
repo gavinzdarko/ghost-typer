@@ -214,7 +214,9 @@ class GhostTyperApp(rumps.App):
                 cancel="Cancel",
                 dimensions=(200, 24),
             )
-            response = window.run()
+            response = self._run_settings_window(window)
+            if response is None:
+                return
             if response.clicked:
                 try:
                     new_val = parse_numeric_setting(key, response.text)
@@ -232,6 +234,26 @@ class GhostTyperApp(rumps.App):
                 except (ValueError, TypeError):
                     rumps.alert("Invalid value", f"Could not parse '{response.text}' as {typ.__name__}")
         return callback
+
+    def _run_settings_window(self, window):
+        """Keep synthetic keys and clipboard capture outside modal settings."""
+        state = self.orchestrator.state
+        if state in (OrchestratorState.PLANNING, OrchestratorState.VERIFYING):
+            self.orchestrator.notification_service.notify_error(
+                "Wait for planning or verification to finish before opening settings."
+            )
+            return None
+        simulator = self.orchestrator._simulator
+        resume_after = state == OrchestratorState.TYPING and simulator is not None
+        if resume_after:
+            self.orchestrator.pause()
+        try:
+            with self.orchestrator.clipboard_monitor.suspended():
+                return window.run()
+        finally:
+            if (resume_after and self.orchestrator._simulator is simulator
+                    and self.orchestrator.state == OrchestratorState.PAUSED):
+                self.orchestrator.resume()
 
     def _make_toggle_callback(self, key: str):
         """Create a callback that toggles a boolean setting."""
