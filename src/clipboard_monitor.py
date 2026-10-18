@@ -188,7 +188,7 @@ class ClipboardMonitor:
             with self._staged_lock:
                 self._staged_content = None
             return
-        logger.info("Clipboard captured: %s", content)
+        logger.info("Clipboard captured: %s, %d characters", "HTML" if content.is_html else "plain text", len(content.text))
         if self._immediate_mode:
             cleared_revision = self._clear_clipboard(expected_revision)
             if cleared_revision is None:
@@ -252,7 +252,7 @@ class ClipboardMonitor:
                 content = self._staged_content
                 self._staged_content = None
             if content:
-                logger.info("Cmd+V triggered — starting typing for: %s", content)
+                logger.info("Cmd+V triggered — starting typing for %d characters", len(content.text))
                 accepted = False
                 try:
                     accepted = self._on_change(content) is not False
