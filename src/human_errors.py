@@ -146,7 +146,8 @@ class HumanErrors:
     def _ai_process_text(self, text: str) -> tuple[str, list[tuple[str, str, int]]]:
         """Call Claude to generate realistic human errors."""
         word_count = len(text.split())
-        misspelling_count = max(1, int(word_count * self.misspelling_rate))
+        misspelling_count = (max(1, int(word_count * self.misspelling_rate))
+                             if self.misspelling_rate > 0 else 0)
         grammar_note = ""
         if self.grammar_error_rate < 0.05:
             grammar_note = "Very few grammar errors (this student is careful). "
@@ -164,6 +165,12 @@ class HumanErrors:
             f"Target about {misspelling_count} misspellings to fix.\n\n"
             f"Text ({word_count} words):\n---\n{text}\n---"
         )
+        if self.misspelling_rate <= 0:
+            user_prompt += "\nDo not generate any misspellings. Return an empty misspellings array."
+        if self.grammar_error_rate <= 0:
+            user_prompt += "\nDo not change spelling, word choice, or grammar."
+        if self.punctuation_error_rate <= 0:
+            user_prompt += "\nPreserve all punctuation exactly."
 
         response = self._client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -185,6 +192,15 @@ class HumanErrors:
         modified_text = data.get("modified_text", text)
         if not self._valid_modified_text(text, modified_text):
             return text, []
+        # Disabled controls are constraints, including when the model ignores
+        # the prompt. Keep punctuation-only edits separate from word changes.
+        words = lambda value: re.findall(r"\w+", value)
+        punctuation = lambda value: "".join(c for c in value if not c.isalnum() and not c.isspace())
+        if ((self.grammar_error_rate <= 0 and words(text) != words(modified_text))
+                or (self.punctuation_error_rate <= 0 and punctuation(text) != punctuation(modified_text))):
+            modified_text = text
+        if self.misspelling_rate <= 0:
+            return modified_text, []
         raw_misspellings = data.get("misspellings", [])
         if not isinstance(raw_misspellings, list):
             raw_misspellings = []
