@@ -185,14 +185,15 @@ class TypingAnalyzer:
 
     def _compute_intervals(self) -> None:
         """Compute inter-key intervals and per-digraph/char timings."""
-        typing_events = [e for e in self.events if not e.is_backspace]
-        for i in range(1, len(typing_events)):
-            prev = typing_events[i - 1]
-            curr = typing_events[i]
+        for prev, curr in zip(self.events, self.events[1:]):
+            # Removing backspaces before pairing bridges an entire correction
+            # into a fictitious digraph and inflates the baseline key interval.
+            if prev.is_backspace or curr.is_backspace:
+                continue
             dt = curr.timestamp - prev.timestamp
 
             # Skip huge pauses for interval stats (those are "pauses", not typing speed)
-            if dt > 5.0:
+            if not 0 < dt <= 5.0:
                 continue
 
             self.intervals.append(dt)
@@ -252,10 +253,9 @@ class TypingAnalyzer:
 
     def _detect_pauses(self) -> None:
         """Find significant pauses and classify them."""
-        typing_events = [e for e in self.events if not e.is_backspace]
-        for i in range(1, len(typing_events)):
-            prev = typing_events[i - 1]
-            curr = typing_events[i]
+        for prev, curr in zip(self.events, self.events[1:]):
+            if prev.is_backspace or curr.is_backspace:
+                continue
             dt = curr.timestamp - prev.timestamp
 
             if dt < THINKING_PAUSE_THRESHOLD:
