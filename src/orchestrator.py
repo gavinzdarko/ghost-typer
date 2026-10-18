@@ -528,7 +528,20 @@ class Orchestrator:
         return settings_dict.get("anthropic_api_key", "").strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
     def update_settings(self, settings_dict: dict) -> None:
-        """Apply new settings from the UI."""
+        """Apply settings between sessions so active plans retain their context."""
+        with self._session_lock:
+            worker = self._typing_thread
+            if self.state != OrchestratorState.IDLE or (worker and worker.is_alive()):
+                # Own a copy: UI dictionaries may be edited again while a plan
+                # or a paused simulator still relies on the current settings.
+                self._pending_settings = dict(settings_dict)
+                logger.info("Settings saved for the next typing session")
+                return
+            self._apply_settings(dict(settings_dict))
+            self._pending_settings = None
+
+    def _apply_settings(self, settings_dict: dict) -> None:
+        """Replace components only while the session lock excludes a launch."""
         self._settings_dict = settings_dict
         self._settings = self._build_settings(settings_dict)
 
@@ -569,6 +582,10 @@ class Orchestrator:
             if (worker and worker.is_alive()) or self.state != OrchestratorState.IDLE:
                 logger.info("Ignoring launch while a previous session is active")
                 return False
+            pending = getattr(self, "_pending_settings", None)
+            if pending is not None:
+                self._apply_settings(pending)
+                self._pending_settings = None
             self._cancel_event.clear()
             self.state = OrchestratorState.PLANNING
             try:
