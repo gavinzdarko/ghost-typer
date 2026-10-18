@@ -781,18 +781,7 @@ class Orchestrator:
                 prev_char = self._execute_rewrite(action, engine, simulator)
 
             elif isinstance(action, PressKey):
-                p = self._profile
-                simulator.press_key(action.key)
-                if action.key in ("left", "right", "up", "down"):
-                    # Arrow keys are pressed rapidly when navigating
-                    simulator.wait(engine._rng.uniform(
-                        p.orchestration.arrow_key_pause.min,
-                        p.orchestration.arrow_key_pause.max,
-                    ))
-                else:
-                    delay = engine.delay_for_keystroke("\n", prev_char)
-                    simulator.wait(delay)
-                    prev_char = ""
+                prev_char = self._execute_press_key(action, engine, simulator, prev_char)
 
             elif isinstance(action, DistractionPause):
                 self._execute_pause(action.duration, engine, simulator)
@@ -962,22 +951,33 @@ class Orchestrator:
                 simulator.wait(p.orchestration.formatting_hotkey_pause)
             return prev_char
         elif isinstance(action, PressKey):
-            p = self._profile
-            simulator.press_key(action.key)
-            if action.key in ("left", "right", "up", "down"):
-                simulator.wait(engine._rng.uniform(
-                    p.orchestration.arrow_key_pause.min,
-                    p.orchestration.arrow_key_pause.max,
-                ))
-            else:
-                delay = engine.delay_for_keystroke("\n", prev_char)
-                simulator.wait(delay)
-            return "" if action.key not in ("left", "right", "up", "down") else prev_char
+            return self._execute_press_key(action, engine, simulator, prev_char)
         elif isinstance(action, DistractionPause):
             self._execute_pause(action.duration, engine, simulator)
             return prev_char
         elif isinstance(action, AbandonWord):
             return self._execute_abandon_word(action, engine, simulator, prev_char)
+        return prev_char
+
+    def _execute_press_key(self, action: PressKey, engine: TypingEngine,
+                           simulator: KeystrokeSimulator, prev_char: str) -> str:
+        """Keep word timing in sync with structural keys in every action list."""
+        p = self._profile
+        structural = {"enter": "\n", "return": "\n", "tab": "\t", "space": " "}
+        char = structural.get(action.key)
+        if char is not None:
+            simulator.wait(engine.delay_for_keystroke(char, prev_char))
+            if self._cancel_event.is_set() or not simulator.is_active:
+                return prev_char
+            simulator.press_key(action.key)
+            engine.on_char_typed(char)
+            return ""
+        simulator.press_key(action.key)
+        if action.key in ("left", "right", "up", "down"):
+            simulator.wait(engine._rng.uniform(
+                p.orchestration.arrow_key_pause.min,
+                p.orchestration.arrow_key_pause.max,
+            ))
         return prev_char
 
     def _execute_abandon_word(

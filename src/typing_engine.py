@@ -541,7 +541,7 @@ class TypingEngine:
     def on_char_typed(self, char: str) -> None:
         self.state.chars_typed += 1
         self.state.chars_since_peek += 1
-        if char == " " or char == "\n":
+        if char.isspace():
             self.state.current_word = ""
             self.state.words_since_pause += 1
             self._refresh_effective_wpm()
