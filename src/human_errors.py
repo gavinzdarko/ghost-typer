@@ -146,7 +146,8 @@ class HumanErrors:
     def _ai_process_text(self, text: str) -> tuple[str, list[tuple[str, str, int]]]:
         """Call Claude to generate realistic human errors."""
         word_count = len(text.split())
-        misspelling_count = max(1, int(word_count * self.misspelling_rate))
+        misspelling_count = (max(1, int(word_count * self.misspelling_rate))
+                             if self.misspelling_rate > 0 else 0)
         grammar_note = ""
         if self.grammar_error_rate < 0.05:
             grammar_note = "Very few grammar errors (this student is careful). "
@@ -164,6 +165,12 @@ class HumanErrors:
             f"Target about {misspelling_count} misspellings to fix.\n\n"
             f"Text ({word_count} words):\n---\n{text}\n---"
         )
+        if self.misspelling_rate <= 0:
+            user_prompt += "\nDo not generate any misspellings. Return an empty misspellings array."
+        if self.grammar_error_rate <= 0:
+            user_prompt += "\nDo not change spelling, word choice, or grammar."
+        if self.punctuation_error_rate <= 0:
+            user_prompt += "\nPreserve all punctuation exactly."
 
         response = self._client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -185,6 +192,16 @@ class HumanErrors:
         modified_text = data.get("modified_text", text)
         if not self._valid_modified_text(text, modified_text):
             return text, []
+        # Disabled controls are constraints, including when the model ignores
+        # the prompt. Keep punctuation-only edits separate from word changes.
+        words = lambda value: "".join(c for c in value if c.isalnum() or c.isspace())
+        punctuation_changed = (self.punctuation_error_rate <= 0
+                               and not self._punctuation_preserved(text, modified_text))
+        if ((self.grammar_error_rate <= 0 and words(text) != words(modified_text))
+                or punctuation_changed):
+            modified_text = text
+        if self.misspelling_rate <= 0:
+            return modified_text, []
         raw_misspellings = data.get("misspellings", [])
         if not isinstance(raw_misspellings, list):
             raw_misspellings = []
@@ -214,6 +231,43 @@ class HumanErrors:
                             misspellings.append((wrong, modified_text[found_pos:found_pos + len(correct)], found_pos))
 
         return modified_text, misspellings
+
+    @staticmethod
+    def _punctuation_preserved(original: str, modified: str) -> bool:
+        """Keep punctuation at the same unambiguous boundary between words.
+
+        Align words independently of punctuation, so an identical comma cannot
+        hide a move across repeated words. Capitalization is a word edit. If a
+        word insertion leaves its punctuation boundary ambiguous, keep source.
+        """
+        def split(value):
+            words, punctuation = [], []
+            for token in re.findall(r"[^\W_]+|[^\w\s]|_", value):
+                if token.isalnum():
+                    words.append(token.casefold())
+                else:
+                    punctuation.append((token, len(words)))
+            return words, punctuation
+
+        before, old_marks = split(original)
+        after, new_marks = split(modified)
+        if [mark for mark, _ in old_marks] != [mark for mark, _ in new_marks]:
+            return False
+        if not old_marks:
+            return True
+        boundaries = {}
+        def record(old, new):
+            boundaries.setdefault(old, set()).add(new)
+        for tag, lo, hi, new_lo, new_hi in SequenceMatcher(
+                None, before, after, autojunk=True).get_opcodes():
+            if tag == "equal":
+                for position in range(lo, hi + 1):
+                    record(position, new_lo + position - lo)
+            else:
+                record(lo, new_lo)
+                record(hi, new_hi)
+        return all(boundaries.get(old_position) == {new_position}
+                   for (_, old_position), (_, new_position) in zip(old_marks, new_marks))
 
     @staticmethod
     def _valid_modified_text(original: str, modified: object) -> bool:
