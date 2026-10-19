@@ -297,8 +297,14 @@ class GhostTyperApp(rumps.App):
                         "Wait for the typing session to become ready before opening settings."
                     )
                     return None
-                resume_after = state == OrchestratorState.TYPING and simulator is not None
-                if resume_after:
+                menu_pause = getattr(self, '_menu_auto_paused', False)
+                resume_after = simulator is not None and (
+                    state == OrchestratorState.TYPING
+                    or state == OrchestratorState.PAUSED and menu_pause
+                )
+                if menu_pause:
+                    self._menu_auto_paused = False
+                if state == OrchestratorState.TYPING and resume_after:
                     self.orchestrator.pause()
                 try:
                     return window.run()
