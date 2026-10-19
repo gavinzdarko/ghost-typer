@@ -73,6 +73,7 @@ class ClipboardMonitor:
         self._immediate_mode = False
         self._saved_clipboard_items = None
         self._owned_empty_revision: int | None = None
+        self._stage_generation = 0
 
     @property
     def enabled(self) -> bool:
@@ -83,6 +84,7 @@ class ClipboardMonitor:
         with self._clipboard_lock:
             self._enabled = value
             if not value:
+                self._stage_generation += 1
                 try:
                     self._restore_staged_clipboard()
                 except Exception:
@@ -185,6 +187,9 @@ class ClipboardMonitor:
         content = self._read_clipboard()
         if self._get_change_count() != expected_revision:
             return
+        # Every stable new copy supersedes the previous stage, including
+        # images/empty copies which leave no replacement text to identify it.
+        self._stage_generation += 1
         if not content or not content.text.strip():
             # A later image/empty copy supersedes any older staged text.
             self._saved_clipboard_items = None
@@ -259,6 +264,8 @@ class ClipboardMonitor:
                 content = self._staged_content
                 self._staged_content = None
             if content:
+                stage_generation = self._stage_generation
+                owned_revision = self._owned_empty_revision
                 logger.info("Cmd+V triggered — starting typing for %d characters", len(content.text))
                 accepted = False
                 try:
@@ -266,10 +273,17 @@ class ClipboardMonitor:
                 except Exception:
                     logger.exception("Error in clipboard change callback")
                 finally:
-                    if accepted:
+                    owns_stage = (self._stage_generation == stage_generation
+                                  and self._owned_empty_revision == owned_revision)
+                    if accepted and owns_stage:
                         self._saved_clipboard_items = None
                         self._owned_empty_revision = None
-                    else:
+                    elif (not accepted and self._enabled and owns_stage
+                          and (owned_revision is None
+                               or self._get_change_count() == owned_revision)):
+                        # A callback may turn OFF/stop the monitor or a user
+                        # may copy again while launch is rejected. Neither
+                        # event permits the old stage to be resurrected.
                         with self._staged_lock:
                             if self._staged_content is None:
                                 self._staged_content = content
