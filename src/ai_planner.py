@@ -698,8 +698,12 @@ class AIRewriter:
                 original = t.get("original", "")
                 revised = t.get("revised", "")
                 if (
-                    original
+                    isinstance(original, str)
+                    and isinstance(revised, str)
+                    and original
                     and revised
+                    and revised.isascii()
+                    and revised.isprintable()
                     and original != revised
                     and original in typed_so_far
                     and 0.3 < len(revised) / max(len(original), 1) < 3.0
