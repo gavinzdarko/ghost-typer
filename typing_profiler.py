@@ -349,12 +349,18 @@ class TypingAnalyzer:
         start = typing_events[0].timestamp
         end = typing_events[-1].timestamp
 
+        # The recorder supplies events in time order. Slide both edges once
+        # instead of rescanning the full recording for every five-second step.
+        char_times = [e.timestamp for e in typing_events if len(e.char) == 1]
+        left = right = 0
         t = start
         while t + window <= end:
-            chars_in_window = sum(
-                1 for e in typing_events
-                if t <= e.timestamp < t + window and len(e.char) == 1
-            )
+            while left < len(char_times) and char_times[left] < t:
+                left += 1
+            right = max(left, right)
+            while right < len(char_times) and char_times[right] < t + window:
+                right += 1
+            chars_in_window = right - left
             wpm = (chars_in_window / 5) / (window / 60)
             self.rolling_wpms.append(wpm)
             t += 5.0  # step by 5 seconds
