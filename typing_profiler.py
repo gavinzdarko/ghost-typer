@@ -172,8 +172,14 @@ class TypingAnalyzer:
     def analyze(self) -> dict:
         """Run full analysis and return a profile dict."""
         if len(self.events) < 10:
-            print("Not enough keystrokes to analyze.")
-            sys.exit(1)
+            raise ValueError("Not enough keystrokes to analyze (at least 10 required).")
+        timestamps = [event.timestamp for event in self.events]
+        if (not all(math.isfinite(timestamp) for timestamp in timestamps)
+                or any(b < a for a, b in zip(timestamps, timestamps[1:]))
+                or timestamps[-1] <= timestamps[0]):
+            raise ValueError("Recording timestamps must be finite, ordered, and span positive time.")
+        if not any(not event.is_backspace and len(event.char) == 1 for event in self.events):
+            raise ValueError("Recording contains no typed characters to analyze.")
 
         # Reanalysis must rebuild statistics from this recording, including
         # when callers append new events between previews.
@@ -730,7 +736,11 @@ def main():
         sys.exit(1)
 
     analyzer = TypingAnalyzer(recorder.events)
-    profile = analyzer.analyze()
+    try:
+        profile = analyzer.analyze()
+    except ValueError as exc:
+        print(f"  Could not analyze recording: {exc}")
+        sys.exit(1)
 
     # Print results
     print_profile(profile)
