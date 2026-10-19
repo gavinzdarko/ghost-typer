@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from copy import deepcopy
 import threading
 import time
 from enum import Enum, auto
@@ -60,6 +61,7 @@ class Orchestrator:
     def __init__(self, profile: TypingProfile | None = None) -> None:
         # Typing profile (AI-generated or defaults)
         self._profile = profile or TypingProfile.defaults()
+        self._baseline_profile = deepcopy(self._profile)
 
         # Load persisted settings (flat dict with both Settings fields and app-level fields)
         self._settings_dict = load_settings_dict()
@@ -727,7 +729,7 @@ class Orchestrator:
         from concurrent.futures import ThreadPoolExecutor
 
         generator = self.ai_profile_generator
-        defaults = (TypingProfile.defaults(), {})
+        defaults = (deepcopy(self._baseline_profile), {})
         if (not generator.is_enabled or self._cancel_event.is_set()
                 or any(not future.done() for future in self._profile_futures)):
             return defaults
