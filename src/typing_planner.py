@@ -170,6 +170,7 @@ class TypingPlanner:
 
     # Includes repeats and nested rewrites. Exhaustion falls back to local typing.
     MAX_DRAFT_REQUESTS_PER_PLAN = 8
+    MAX_DRAFT_CONTEXT_CHARS = 1_000
     MAX_REVISIT_REQUESTS_PER_PLAN = 5
 
     def __init__(self, settings: Settings | None = None, ai_rewriter=None, profile: TypingProfile | None = None, *, ai_enabled: bool = True, api_key: str | None = None) -> None:
@@ -178,7 +179,7 @@ class TypingPlanner:
         self.engine = TypingEngine(self.settings, profile=self._profile)
         self._rng = random.Random()
         self._ai_rewriter = ai_rewriter  # AIRewriter instance (optional)
-        self._draft_cache: dict[str, str | None] = {}  # final_text -> draft_text
+        self._draft_cache: dict[tuple[str, str], str | None] = {}
         self._draft_requests = 0
         self._thought_boundaries: set[int] = set()  # char positions of thought boundaries
         self._human_errors = HumanErrors(
@@ -1226,8 +1227,10 @@ class TypingPlanner:
         # cannot safely predict native deletion units for Unicode graphemes.
         if not final_text.isascii() or not final_text.isprintable():
             return None
-        if final_text in self._draft_cache:
-            return self._draft_cache[final_text]
+        context = context[:self.MAX_DRAFT_CONTEXT_CHARS]
+        cache_key = (final_text, context)
+        if cache_key in self._draft_cache:
+            return self._draft_cache[cache_key]
         if (not self._ai_rewriter or not self._ai_rewriter.is_enabled
                 or self._draft_requests >= self.MAX_DRAFT_REQUESTS_PER_PLAN):
             return None
@@ -1235,13 +1238,13 @@ class TypingPlanner:
         self._draft_requests += 1
         # Cache failures as well: an unavailable draft must not repeatedly spend
         # the budget on the same span. AIRewriter handles API failures locally.
-        self._draft_cache[final_text] = None
+        self._draft_cache[cache_key] = None
         draft = self._ai_rewriter.generate_first_draft(final_text, context)
         self._check_cancelled()
         if (isinstance(draft, str) and draft and draft != final_text
                 and draft.isascii() and draft.isprintable()):
-            self._draft_cache[final_text] = draft
-        return self._draft_cache[final_text]
+            self._draft_cache[cache_key] = draft
+        return self._draft_cache[cache_key]
 
     def _extract_span(self, text: str, pos: int, granularity: str) -> str | None:
         """Extract the text span for a rewrite at the given position and granularity."""

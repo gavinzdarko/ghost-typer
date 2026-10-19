@@ -79,7 +79,7 @@ def test_unsafe_temporary_draft_is_cached_as_failure_and_original_is_preserved(d
     p._pick_rewrite_positions = lambda *_: [(3, 'word')]
     plan = p.plan_plain_text(text)
     assert PlannedText().apply(plan.actions).text == text
-    assert p._get_ai_draft('ordinary') is None
+    assert p._get_ai_draft('ordinary', 'An ') is None
     assert p._ai_rewriter.generate_first_draft.call_count == 1
 
 
