@@ -884,6 +884,11 @@ class TypingPlanner:
                 if text.isascii() and len(run_text) >= 3 and self.engine.should_false_alarm():
                     fa_chars = min(self.engine.false_alarm_chars(), len(run_text))
                     deleted_text = run_text[-fa_chars:]
+                    # Tab/control events may move focus rather than insert a
+                    # deletable character. Never backspace through them.
+                    if not deleted_text.isprintable():
+                        self._char_position += i - run_start
+                        continue
                     actions.append(Pause(duration=self._rng.uniform(0.2, 0.5)))
                     actions.append(Rewrite.simple(
                         delete_count=fa_chars,
@@ -910,7 +915,8 @@ class TypingPlanner:
         known_text: str | None = None,
     ) -> list[TypingAction]:
         """Correct only verified emitted typo characters with relative moves."""
-        if known_text is None or not known_text.isascii():
+        if (known_text is None or not known_text.isascii()
+                or any(not char.isprintable() and char != "\n" for char in known_text)):
             return []
         actions = []
         text = known_text
@@ -1148,6 +1154,9 @@ class TypingPlanner:
         # Slow cognitive loop — type extra chars before noticing
         chars_after = self.engine.chars_before_noticing_mistake()
         extra_text = text[pos + 1: pos + 1 + chars_after]
+        # A delayed correction cannot traverse Tab/other control events: in
+        # editors they can change focus and backspaces would hit another field.
+        extra_text = "".join(re.match(r"[^\x00-\x1f\x7f]*", extra_text).group())
 
         wrong_text = typo_char + extra_text
         correct_text = intended_char + extra_text

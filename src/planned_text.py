@@ -103,6 +103,7 @@ def replace_known_span(text, original, replacement, *, min_distance=0):
     pos = text.find(original)
     if (not original or not replacement or original == replacement
             or not text.isascii() or not replacement.isascii() or not replacement.isprintable()
+            or any(not char.isprintable() and char != "\n" for char in text)
             or pos < 0 or text.find(original, pos + 1) >= 0):
         return []
     distance = len(text) - pos
