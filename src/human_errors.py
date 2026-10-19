@@ -195,24 +195,8 @@ class HumanErrors:
         # Disabled controls are constraints, including when the model ignores
         # the prompt. Keep punctuation-only edits separate from word changes.
         words = lambda value: "".join(c for c in value if c.isalnum() or c.isspace())
-        punctuation_changed = False
-        if self.punctuation_error_rate <= 0 and modified_text != text:
-            # Match words as units so moving a comma across a word is an edit
-            # to punctuation, even though the punctuation character list agrees.
-            before = re.findall(r"\w+|[^\w\s]", text)
-            after = re.findall(r"\w+|[^\w\s]", modified_text)
-            matcher = SequenceMatcher(None, before, after, autojunk=True)
-            changes = [entry for entry in matcher.get_opcodes() if entry[0] != "equal"]
-            punctuation_changed = any(
-                any(not token.isalnum() for token in before[lo:hi] + after[new_lo:new_hi])
-                for tag, lo, hi, new_lo, new_hi in changes
-            )
-            # Repeated words can make the matcher anchor a relocated comma and
-            # call it a word insertion/deletion instead. Such moves are
-            # ambiguous: preserve the source rather than bypass a disabled rate.
-            removed = {token for _, lo, hi, _, _ in changes for token in before[lo:hi]}
-            inserted = {token for _, _, _, lo, hi in changes for token in after[lo:hi]}
-            punctuation_changed |= bool(removed & inserted)
+        punctuation_changed = (self.punctuation_error_rate <= 0
+                               and not self._punctuation_preserved(text, modified_text))
         if ((self.grammar_error_rate <= 0 and words(text) != words(modified_text))
                 or punctuation_changed):
             modified_text = text
@@ -247,6 +231,43 @@ class HumanErrors:
                             misspellings.append((wrong, modified_text[found_pos:found_pos + len(correct)], found_pos))
 
         return modified_text, misspellings
+
+    @staticmethod
+    def _punctuation_preserved(original: str, modified: str) -> bool:
+        """Keep punctuation at the same unambiguous boundary between words.
+
+        Align words independently of punctuation, so an identical comma cannot
+        hide a move across repeated words. Capitalization is a word edit. If a
+        word insertion leaves its punctuation boundary ambiguous, keep source.
+        """
+        def split(value):
+            words, punctuation = [], []
+            for token in re.findall(r"[^\W_]+|[^\w\s]|_", value):
+                if token.isalnum():
+                    words.append(token.casefold())
+                else:
+                    punctuation.append((token, len(words)))
+            return words, punctuation
+
+        before, old_marks = split(original)
+        after, new_marks = split(modified)
+        if [mark for mark, _ in old_marks] != [mark for mark, _ in new_marks]:
+            return False
+        if not old_marks:
+            return True
+        boundaries = {}
+        def record(old, new):
+            boundaries.setdefault(old, set()).add(new)
+        for tag, lo, hi, new_lo, new_hi in SequenceMatcher(
+                None, before, after, autojunk=True).get_opcodes():
+            if tag == "equal":
+                for position in range(lo, hi + 1):
+                    record(position, new_lo + position - lo)
+            else:
+                record(lo, new_lo)
+                record(hi, new_hi)
+        return all(boundaries.get(old_position) == {new_position}
+                   for (_, old_position), (_, new_position) in zip(old_marks, new_marks))
 
     @staticmethod
     def _valid_modified_text(original: str, modified: object) -> bool:

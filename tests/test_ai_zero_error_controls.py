@@ -69,6 +69,16 @@ def test_disabled_punctuation_rejects_ambiguous_moves_across_repeated_words():
          "We should go go, now and finish our work."),
         ("This is really, really important because every student knows the answer.",
          "This is really really, important bc every student knows the answer."),
+        ("This is really, really important for every student.",
+         "This is really Really, important for every student."),
+        ("We should go, go now and finish our work.",
+         "We should go goes, now and finish our work."),
     ):
         assert process(text, modified, punctuation_error_rate=0,
                        misspelling_rate=0) == (text, [])
+
+
+def test_disabled_punctuation_keeps_underscores_and_allows_word_length_changes():
+    assert not HumanErrors._punctuation_preserved('use snake_case here', 'use snakecase here')
+    assert HumanErrors._punctuation_preserved('They does not know, yet.', 'They dont know, yet.')
+    assert HumanErrors._punctuation_preserved('Hello, there.', 'HELLO, there.')
