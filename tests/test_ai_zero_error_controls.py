@@ -44,3 +44,18 @@ def test_disabled_grammar_rejects_word_boundary_changes():
     text = "The student knows a lot about this subject."
     assert process(text, text.replace("a lot", "alot"), grammar_error_rate=0,
                    misspelling_rate=0) == (text, [])
+
+
+def test_disabled_punctuation_rejects_relocation_of_the_same_comma():
+    text = "The student does not know, because they are tired."
+    for modified in ("The student, does not know because they are tired.",
+                     "The student does not, know because they are tired."):
+        assert process(text, modified, punctuation_error_rate=0,
+                       misspelling_rate=0) == (text, [])
+
+
+def test_disabled_grammar_allows_enabled_apostrophe_punctuation_error():
+    text = "The student doesn't know, because they are tired."
+    modified = text.replace("doesn't", "doesnt")
+    assert process(text, modified, grammar_error_rate=0,
+                   misspelling_rate=0) == (modified, [])

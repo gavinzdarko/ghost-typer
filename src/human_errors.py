@@ -194,10 +194,20 @@ class HumanErrors:
             return text, []
         # Disabled controls are constraints, including when the model ignores
         # the prompt. Keep punctuation-only edits separate from word changes.
-        words = lambda value: re.findall(r"\w+", value)
-        punctuation = lambda value: "".join(c for c in value if not c.isalnum() and not c.isspace())
+        words = lambda value: "".join(c for c in value if c.isalnum() or c.isspace())
+        punctuation_changed = False
+        if self.punctuation_error_rate <= 0 and modified_text != text:
+            # Match words as units so moving a comma across a word is an edit
+            # to punctuation, even though the punctuation character list agrees.
+            before = re.findall(r"\w+|[^\w\s]", text)
+            after = re.findall(r"\w+|[^\w\s]", modified_text)
+            matcher = SequenceMatcher(None, before, after, autojunk=True)
+            punctuation_changed = any(
+                any(not token.isalnum() for token in before[lo:hi] + after[new_lo:new_hi])
+                for tag, lo, hi, new_lo, new_hi in matcher.get_opcodes() if tag != "equal"
+            )
         if ((self.grammar_error_rate <= 0 and words(text) != words(modified_text))
-                or (self.punctuation_error_rate <= 0 and punctuation(text) != punctuation(modified_text))):
+                or punctuation_changed):
             modified_text = text
         if self.misspelling_rate <= 0:
             return modified_text, []
