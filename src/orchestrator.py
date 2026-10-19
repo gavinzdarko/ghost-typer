@@ -838,15 +838,7 @@ class Orchestrator:
             engine.on_char_typed(char)
             prev_char = char
 
-            # Report progress every few characters
-            self._chars_typed += 1
-            p = self._profile
-            progress_cb = self.on_progress  # snapshot to avoid TOCTOU
-            if self._chars_typed % p.orchestration.progress_report_frequency == 0 and progress_cb and not self._cancel_event.is_set():
-                try:
-                    progress_cb(self._chars_typed, self._total_chars, self._typing_start_time)
-                except Exception:
-                    pass
+            self._record_typed_character()
 
         return prev_char
 
@@ -865,7 +857,7 @@ class Orchestrator:
             simulator.type_char(char)
             engine.on_char_typed(char)
             prev_char = char
-            self._chars_typed += 1
+            self._record_typed_character()
 
         # Pause as if noticing the mistake
         p = self._profile
@@ -915,7 +907,7 @@ class Orchestrator:
             simulator.type_char(char)
             engine.on_char_typed(char)
             prev_char = char
-            self._chars_typed += 1
+            self._record_typed_character()
 
         return prev_char
 
@@ -1017,7 +1009,7 @@ class Orchestrator:
             simulator.type_char(char)
             engine.on_char_typed(char)
             prev_char = char
-            self._chars_typed += 1
+            self._record_typed_character()
 
         # Pause (reconsidering)
         p = self._profile
@@ -1048,9 +1040,21 @@ class Orchestrator:
             simulator.type_char(char)
             engine.on_char_typed(char)
             prev_char = char
-            self._chars_typed += 1
+            self._record_typed_character()
 
         return prev_char
+
+    def _record_typed_character(self) -> None:
+        """Report every emitted text path, including corrections and short tails."""
+        self._chars_typed += 1
+        progress_cb = getattr(self, "on_progress", None)
+        if (progress_cb and not self._cancel_event.is_set()
+                and (self._chars_typed % self._profile.orchestration.progress_report_frequency == 0
+                     or self._chars_typed == self._total_chars)):
+            try:
+                progress_cb(self._chars_typed, self._total_chars, self._typing_start_time)
+            except Exception:
+                logger.debug("Progress callback failed", exc_info=True)
 
     def _count_typed_chars(self, actions: list) -> int:
         """Recursively count all characters that will be typed in a list of actions."""
