@@ -10,6 +10,7 @@ import logging
 import os
 import queue
 import threading
+from urllib.parse import urlsplit
 from typing import Optional
 
 import AppKit
@@ -49,6 +50,7 @@ _TOGGLE_SETTINGS = [
     ("burst_typing_enabled", "Burst Typing"),
     ("ai_enabled", "AI Planning"),
     ("sound_enabled", "Sound"),
+    ("verify_after_typing", "Verify After Typing (OCR)"),
 ]
 
 
@@ -197,6 +199,43 @@ class GhostTyperApp(rumps.App):
             item.state = 1 if val else 0
             self._settings_menu[key] = item
             self._setting_items[key] = (item, None, name)
+
+        for key, name in (("anthropic_api_key", "Anthropic API Key"),
+                          ("webhook_url", "Notification Webhook")):
+            self._settings_menu[key] = rumps.MenuItem(
+                name, callback=self._make_connection_callback(key, name)
+            )
+
+    def _make_connection_callback(self, key: str, name: str):
+        """Edit connection secrets through native, masked input fields."""
+        def callback(_sender):
+            window = rumps.Window(
+                message=("Enter a replacement value. Leave blank to clear the saved value. "
+                         "A cleared API key uses ANTHROPIC_API_KEY from the environment."),
+                title=f"Ghost Typer — {name}", default_text="", secure=True,
+                ok="Save", cancel="Cancel", dimensions=(320, 24),
+            )
+            response = self._run_settings_window(window)
+            if response is None or not response.clicked:
+                return
+            value = response.text.strip()
+            if key == "webhook_url" and value:
+                try:
+                    parsed = urlsplit(value)
+                    valid_url = parsed.scheme in ("http", "https") and bool(parsed.hostname)
+                except ValueError:
+                    valid_url = False
+                if not valid_url:
+                    self.orchestrator.notification_service.notify_error(
+                        "Webhook must be an HTTP or HTTPS URL."
+                    )
+                    return
+            candidate = {**self._settings_dict, key: value}
+            save_settings_dict(candidate)
+            self._settings_dict = candidate
+            self.orchestrator.update_settings(candidate)
+            logger.info("Connection setting %s updated", key)
+        return callback
 
     def _make_numeric_callback(self, key: str, name: str, typ: type, fmt_fn):
         """Create a callback that opens a dialog to edit a numeric setting."""
