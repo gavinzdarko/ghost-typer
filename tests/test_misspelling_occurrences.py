@@ -4,7 +4,7 @@ from src.typing_planner import TypingPlanner
 
 
 def planner(misspellings):
-    p = TypingPlanner(Settings(error_rate=0, false_alarm_rate=0,
+    p = TypingPlanner(Settings(error_rate=0, false_alarm_rate=0, pause_frequency=0,
                               rewrite_base_probability=0, rewrite_max_probability=0), ai_enabled=False)
     p._human_errors.process_text = lambda text: (text, misspellings)
     return p
