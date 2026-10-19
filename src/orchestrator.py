@@ -252,10 +252,9 @@ class Orchestrator:
 
     def enable_table_fill(self) -> None:
         """Enter table fill mode — pastes queue up instead of typing."""
-        with self._table_queue_lock:
-            self._table_queue.clear()
         self._table_fill_mode = True
         self.clipboard_monitor._immediate_mode = True
+        self._notify_table_queue_change(self.table_queue_count())
         logger.info("Table fill mode ON")
 
     def disable_table_fill(self) -> None:

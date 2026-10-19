@@ -357,7 +357,7 @@ class GhostTyperApp(rumps.App):
                 self.icon = ICON_IDLE
             self.orchestrator.enable_table_fill()
             sender.state = 1
-            self._status_item.title = "Table Fill: 0 items queued"
+            self._status_item.title = f"Table Fill: {self.orchestrator.table_queue_count()} items queued"
 
     def _run_table_fill(self, _sender: rumps.MenuItem) -> None:
         """Execute the table fill queue."""
