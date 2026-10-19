@@ -59,3 +59,16 @@ def test_disabled_grammar_allows_enabled_apostrophe_punctuation_error():
     modified = text.replace("doesn't", "doesnt")
     assert process(text, modified, grammar_error_rate=0,
                    misspelling_rate=0) == (modified, [])
+
+
+def test_disabled_punctuation_rejects_ambiguous_moves_across_repeated_words():
+    for text, modified in (
+        ("This is really, really important for every student.",
+         "This is really really, important for every student."),
+        ("We should go, go now and finish our work.",
+         "We should go go, now and finish our work."),
+        ("This is really, really important because every student knows the answer.",
+         "This is really really, important bc every student knows the answer."),
+    ):
+        assert process(text, modified, punctuation_error_rate=0,
+                       misspelling_rate=0) == (text, [])

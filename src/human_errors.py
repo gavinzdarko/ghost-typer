@@ -202,10 +202,17 @@ class HumanErrors:
             before = re.findall(r"\w+|[^\w\s]", text)
             after = re.findall(r"\w+|[^\w\s]", modified_text)
             matcher = SequenceMatcher(None, before, after, autojunk=True)
+            changes = [entry for entry in matcher.get_opcodes() if entry[0] != "equal"]
             punctuation_changed = any(
                 any(not token.isalnum() for token in before[lo:hi] + after[new_lo:new_hi])
-                for tag, lo, hi, new_lo, new_hi in matcher.get_opcodes() if tag != "equal"
+                for tag, lo, hi, new_lo, new_hi in changes
             )
+            # Repeated words can make the matcher anchor a relocated comma and
+            # call it a word insertion/deletion instead. Such moves are
+            # ambiguous: preserve the source rather than bypass a disabled rate.
+            removed = {token for _, lo, hi, _, _ in changes for token in before[lo:hi]}
+            inserted = {token for _, _, _, lo, hi in changes for token in after[lo:hi]}
+            punctuation_changed |= bool(removed & inserted)
         if ((self.grammar_error_rate <= 0 and words(text) != words(modified_text))
                 or punctuation_changed):
             modified_text = text
