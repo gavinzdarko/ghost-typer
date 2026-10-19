@@ -78,6 +78,11 @@ class PauseEvent:
 # Recorder
 # ---------------------------------------------------------------------------
 
+_SHIFT_KEYS = {keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r}
+_SHORTCUT_KEYS = {keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
+                  keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r}
+
+
 class TypingRecorder:
     """Captures raw keystrokes with timestamps."""
 
@@ -85,11 +90,16 @@ class TypingRecorder:
         self.events: list[KeyEvent] = []
         self._start_time: float = 0.0
         self._shift_held = False
+        self._held_modifiers = set()
         self._done = False
         self._listener: keyboard.Listener | None = None
 
     def start(self) -> None:
-        self._start_time = time.time()
+        self.events.clear()
+        self._held_modifiers.clear()
+        self._shift_held = False
+        self._done = False
+        self._start_time = time.monotonic()
         self._listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
@@ -106,15 +116,20 @@ class TypingRecorder:
         return self._done
 
     def _on_press(self, key) -> None:
-        now = time.time()
+        now = time.monotonic()
 
         # ESC = finish recording
         if key == keyboard.Key.esc:
             self._done = True
             return False  # stop listener
 
-        if key in (keyboard.Key.shift, keyboard.Key.shift_r):
-            self._shift_held = True
+        if key in _SHIFT_KEYS | _SHORTCUT_KEYS:
+            self._held_modifiers.add(key)
+            self._shift_held = bool(self._held_modifiers & _SHIFT_KEYS)
+            return
+        # Command/control chords edit or navigate the application; their
+        # letters are not text keystrokes and must not train the profile.
+        if self._held_modifiers & _SHORTCUT_KEYS:
             return
 
         event = KeyEvent(timestamp=now, char="", is_shift=self._shift_held)
@@ -138,8 +153,8 @@ class TypingRecorder:
         self.events.append(event)
 
     def _on_release(self, key) -> None:
-        if key in (keyboard.Key.shift, keyboard.Key.shift_r):
-            self._shift_held = False
+        self._held_modifiers.discard(key)
+        self._shift_held = bool(self._held_modifiers & _SHIFT_KEYS)
 
 
 # ---------------------------------------------------------------------------
