@@ -190,14 +190,17 @@ class ClipboardMonitor:
             return
         logger.info("Clipboard captured: %s, %d characters", "HTML" if content.is_html else "plain text", len(content.text))
         if self._immediate_mode:
-            cleared_revision = self._clear_clipboard(expected_revision)
-            if cleared_revision is None:
-                return
-            self._last_change_count = cleared_revision
             try:
-                self._on_change(content)
+                accepted = self._on_change(content) is not False
             except Exception:
                 logger.exception("Error in clipboard change callback")
+                return
+            # Queue ownership must transfer successfully before consuming a copy.
+            # The revision check still protects a newer copy made by the user.
+            if accepted:
+                cleared_revision = self._clear_clipboard(expected_revision)
+                if cleared_revision is not None:
+                    self._last_change_count = cleared_revision
         else:
             # Keep every representation until this staged paste is accepted.
             pb = NSPasteboard.generalPasteboard()
