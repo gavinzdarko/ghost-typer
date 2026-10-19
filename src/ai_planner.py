@@ -509,7 +509,7 @@ class AIRewriter:
     that a human might type before deleting and rewriting better."""
 
     MAX_SPAN_CHARS = 2_000
-    MAX_CONTEXT_CHARS = 1_000
+    MAX_CONTEXT_CHARS = TypingPlanner.MAX_DRAFT_CONTEXT_CHARS
     MAX_BATCH_CHARS = 8_000
     MAX_BATCH_SPANS = 16
     MAX_REVISIT_CHARS = 8_000
@@ -520,7 +520,7 @@ class AIRewriter:
         self._api_key = (api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")) if enabled else None
         self._client: Optional[anthropic.Anthropic] = None
         self._enabled = bool(self._api_key)
-        self._cache: OrderedDict[str, str] = OrderedDict()
+        self._cache: OrderedDict[str | tuple[str, str], str] = OrderedDict()
 
         if self._api_key:
             try:
@@ -546,10 +546,12 @@ class AIRewriter:
             return None
         context = context[:self.MAX_CONTEXT_CHARS]
 
-        # Check cache
-        if final_text in self._cache:
-            self._cache.move_to_end(final_text)
-            return self._cache[final_text]
+        # Context changes the meaning of a rough draft, so it is part of
+        # cache identity (including for batch and single-call reuse).
+        cache_key = self._draft_key(final_text, context)
+        if cache_key in self._cache:
+            self._cache.move_to_end(cache_key)
+            return self._cache[cache_key]
 
         try:
             response = self._client.messages.create(
@@ -574,7 +576,7 @@ class AIRewriter:
             draft = response.content[0].text.strip()
             # Sanity check — draft should be similar length
             if 0.3 < len(draft) / max(len(final_text), 1) < 2.5:
-                self._cache_draft(final_text, draft)
+                self._cache_draft(final_text, draft, context)
                 return draft
             return None
         except Exception:
@@ -597,8 +599,9 @@ class AIRewriter:
 
         # Check cache for already-generated drafts
         results: list[Optional[str]] = [None] * len(spans)
-        uncached_indices: list[int] = []
+        uncached_indices: list[list[int]] = []
         uncached_spans: list[dict[str, str]] = []
+        pending_keys: dict[str | tuple[str, str], int] = {}
 
         batch_chars = 0
         for i, span in enumerate(spans):
@@ -606,12 +609,16 @@ class AIRewriter:
             if not text.strip() or len(text) > self.MAX_SPAN_CHARS:
                 continue
             context = span.get("context", "")[:self.MAX_CONTEXT_CHARS]
-            if text in self._cache:
-                self._cache.move_to_end(text)
-                results[i] = self._cache[text]
+            cache_key = self._draft_key(text, context)
+            if cache_key in self._cache:
+                self._cache.move_to_end(cache_key)
+                results[i] = self._cache[cache_key]
+            elif cache_key in pending_keys:
+                uncached_indices[pending_keys[cache_key]].append(i)
             elif (len(uncached_spans) < self.MAX_BATCH_SPANS
                   and batch_chars + len(text) + len(context) <= self.MAX_BATCH_CHARS):
-                uncached_indices.append(i)
+                pending_keys[cache_key] = len(uncached_spans)
+                uncached_indices.append([i])
                 uncached_spans.append({"text": text, "context": context})
                 batch_chars += len(text) + len(context)
 
@@ -661,15 +668,15 @@ class AIRewriter:
             for i, draft in enumerate(drafts):
                 if i >= len(uncached_indices):
                     break
-                orig_idx = uncached_indices[i]
                 orig_text = uncached_spans[i].get("text", "")
                 if (
                     isinstance(draft, str)
                     and draft
                     and 0.3 < len(draft) / max(len(orig_text), 1) < 2.5
                 ):
-                    results[orig_idx] = draft
-                    self._cache_draft(orig_text, draft)
+                    for orig_idx in uncached_indices[i]:
+                        results[orig_idx] = draft
+                    self._cache_draft(orig_text, draft, uncached_spans[i].get("context", ""))
 
         except Exception:
             logger.exception("AI batch rewriter failed")
@@ -752,14 +759,20 @@ class AIRewriter:
             logger.exception("AI revisit target picker failed")
             return []
 
-    def _cache_draft(self, text: str, draft: str) -> None:
-        """Keep useful recent drafts without retaining every clipboard session."""
-        if len(text) + len(draft) > self.MAX_CACHE_CHARS:
+    @staticmethod
+    def _draft_key(text: str, context: str = "") -> str | tuple[str, str]:
+        return (text, context) if context else text
+
+    def _cache_draft(self, text: str, draft: str, context: str = "") -> None:
+        """Keep recent drafts and their context within the retention budget."""
+        if len(text) + len(context) + len(draft) > self.MAX_CACHE_CHARS:
             return
-        self._cache[text] = draft
-        self._cache.move_to_end(text)
+        key = self._draft_key(text, context)
+        self._cache[key] = draft
+        self._cache.move_to_end(key)
         while (len(self._cache) > self.MAX_CACHE_ENTRIES
-               or sum(len(k) + len(v) for k, v in self._cache.items()) > self.MAX_CACHE_CHARS):
+               or sum((sum(map(len, k)) if isinstance(k, tuple) else len(k)) + len(v)
+                      for k, v in self._cache.items()) > self.MAX_CACHE_CHARS):
             self._cache.popitem(last=False)
 
     def clear_cache(self) -> None:
