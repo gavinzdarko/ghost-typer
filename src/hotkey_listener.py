@@ -46,27 +46,42 @@ class HotkeyListener:
         self._suppressed = False  # True while typing engine is active
         self._pressed_modifiers = {name: set() for name in ("shift", "ctrl", "cmd")}
         self._f6_down = False
+        self._lifecycle_lock = threading.Lock()
 
     def start(self) -> None:
-        """Start listening for hotkeys."""
-        self._key_listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release,
-        )
-        self._key_listener.daemon = True
-        self._key_listener.start()
+        """Start exactly one listener, including when startup is called twice."""
+        with self._lifecycle_lock:
+            if self._key_listener is not None and self._key_listener.is_alive():
+                return
+            self._reset_state()
+            listener = keyboard.Listener(
+                on_press=self._on_press,
+                on_release=self._on_release,
+            )
+            listener.daemon = True
+            try:
+                listener.start()
+            except Exception:
+                listener.stop()
+                raise
+            self._key_listener = listener
         logger.info("Hotkey listener started (F6=pause, Shift+F6=stop, Ctrl+F6=on/off)")
 
     def stop(self) -> None:
-        """Stop listening."""
-        if self._key_listener:
-            self._key_listener.stop()
-            self._key_listener = None
+        """Stop the owned listener and discard state before a later restart."""
+        with self._lifecycle_lock:
+            if self._key_listener:
+                self._key_listener.stop()
+                self._key_listener = None
+            self._reset_state()
+        logger.info("Hotkey listener stopped")
+
+    def _reset_state(self) -> None:
         for keys in self._pressed_modifiers.values():
             keys.clear()
         self._shift_pressed = self._ctrl_pressed = self._cmd_pressed = False
         self._f6_down = False
-        logger.info("Hotkey listener stopped")
+        self._suppressed = False
 
     def suppress(self) -> None:
         """Suppress action triggers while typing engine sends synthetic keystrokes.
