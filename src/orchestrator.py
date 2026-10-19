@@ -37,7 +37,7 @@ from .notification_service import NotificationService
 from .settings_ui import DEFAULTS, load_settings_dict, save_settings_dict
 from .text_parser import TextParser
 from .typing_engine import TypingEngine
-from .typing_planner import TypingPlanner
+from .typing_planner import PlanningCancelled, TypingPlanner
 from .visual_verifier import VisualVerifier
 
 logger = logging.getLogger(__name__)
@@ -468,7 +468,7 @@ class Orchestrator:
                 # Cell is empty — type the next queued item into it
                 segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
                 if segments and segments[0].text.strip():
-                    cell_plan = self.fallback_planner.plan(segments, simple=True)
+                    cell_plan = self.fallback_planner.plan(segments, simple=True, cancelled=self._cancel_event.is_set)
 
                     self._total_chars = self._count_typed_chars(cell_plan.actions)
                     self._chars_typed = 0
@@ -506,6 +506,8 @@ class Orchestrator:
                 cell_count, skipped_count, self._current_word_count, elapsed,
             )
 
+        except PlanningCancelled:
+            logger.info("Table fill planning cancelled")
         except Exception as e:
             logger.exception("Error in table fill pipeline")
             self.notification_service.notify_error(str(e))
@@ -623,7 +625,8 @@ class Orchestrator:
             # generation is inconsistent.
             logger.info("Using rule-based planner")
             self.fallback_planner.profile = self._profile
-            plan = self.fallback_planner.plan(segments, behavioral_content=self._behavioral_content)
+            plan = self.fallback_planner.plan(segments, behavioral_content=self._behavioral_content,
+                                              cancelled=self._cancel_event.is_set)
 
             if self._cancel_event.is_set():
                 return
@@ -689,6 +692,8 @@ class Orchestrator:
                 elapsed,
             )
 
+        except PlanningCancelled:
+            logger.info("Typing planning cancelled")
         except Exception as e:
             logger.exception("Error in typing pipeline")
             self.notification_service.notify_error(str(e))

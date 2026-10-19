@@ -161,6 +161,10 @@ def validate_behavioral_content(data: object, text: str) -> dict:
     return result
 
 
+class PlanningCancelled(RuntimeError):
+    """The session was stopped before its plan could be completed."""
+
+
 class TypingPlanner:
     """Converts TextSegments into a TypingPlan with realistic mistakes and pauses."""
 
@@ -196,6 +200,11 @@ class TypingPlanner:
         self._char_position = 0
         self._typed_prefix = ""
         self._chunk_prefix = ""
+        self._cancelled = lambda: False
+
+    def _check_cancelled(self) -> None:
+        if self._cancelled():
+            raise PlanningCancelled("Typing planning cancelled")
 
     @property
     def profile(self) -> TypingProfile:
@@ -218,7 +227,7 @@ class TypingPlanner:
     # Public API
     # ------------------------------------------------------------------
 
-    def plan(self, segments: list[TextSegment], simple: bool = False, behavioral_content: dict | None = None) -> TypingPlan:
+    def plan(self, segments: list[TextSegment], simple: bool = False, behavioral_content: dict | None = None, *, cancelled=None) -> TypingPlan:
         """Build a complete TypingPlan from a list of TextSegments.
 
         Args:
@@ -228,6 +237,8 @@ class TypingPlanner:
             behavioral_content: AI-generated behavioral data (word speeds,
                     abandonments, distractions, etc.). Empty dict = no-op.
         """
+        self._cancelled = cancelled or (lambda: False)
+        self._check_cancelled()
         # pynput treats both CR and LF as Enter; one CRLF must be one event.
         if any("\r" in segment.text for segment in segments):
             segments = [replace(segment, text=segment.text.replace("\r\n", "\n").replace("\r", "\n")) for segment in segments]
@@ -250,9 +261,11 @@ class TypingPlanner:
         # Detect thought boundaries via AI
         if not simple:
             full_text = "".join(seg.text for seg in segments)
+            self._check_cancelled()
             self._thought_boundaries = set(
                 self._human_errors.find_thought_boundaries(full_text)
             )
+            self._check_cancelled()
 
         # Reset revisit counter for this planning session
         self._revisit_count = 0
@@ -274,6 +287,7 @@ class TypingPlanner:
         navigation_valid = True
 
         for seg_idx, segment in enumerate(segments):
+            self._check_cancelled()
             self._typed_prefix = typed_so_far
             if simple:
                 seg_actions, seg_chars = self._plan_segment_simple(segment)
@@ -343,7 +357,9 @@ class TypingPlanner:
 
         # --- Apply human errors (grammar, punctuation, spelling that stay in) ---
         if self.settings.grammar_error_rate > 0 or self.settings.punctuation_error_rate > 0:
+            self._check_cancelled()
             modified_text, misspellings = self._human_errors.process_text(segment.text)
+            self._check_cancelled()
             self._remap_source_annotations(segment.text, modified_text, self._char_position)
             # Preserve the validated occurrence, rather than redirecting a typo
             # to the first case-insensitive match elsewhere in the paragraph.
@@ -518,6 +534,7 @@ class TypingPlanner:
         char_count = 0
         i = 0
         while i < len(text):
+            self._check_cancelled()
             char = text[i]
 
             # Occasional single-char mistake (backspace and fix, no arrow keys)
@@ -764,6 +781,7 @@ class TypingPlanner:
 
         i = 0
         while i < len(text):
+            self._check_cancelled()
             if self._abandon_count >= abandonment_cfg.max_per_session:
                 abandonment_positions.clear()
             # Check for rewrite at this word boundary
@@ -914,6 +932,7 @@ class TypingPlanner:
 
         Called at paragraph boundaries. Uses AI to pick what to revise.
         """
+        self._check_cancelled()
         if not hasattr(self, '_revisit_count'):
             self._revisit_count = 0
 
@@ -939,10 +958,12 @@ class TypingPlanner:
             return []
 
         # Ask AI to pick revision targets from what's been typed so far
+        self._check_cancelled()
         self._revisit_requests = getattr(self, "_revisit_requests", 0) + 1
         targets = self._ai_rewriter.pick_revisit_targets(
             typed_so_far[-2048:], num_targets=self._rng.randint(1, 2)
         )
+        self._check_cancelled()
 
         if not targets:
             return []
@@ -1179,6 +1200,7 @@ class TypingPlanner:
 
     def _get_ai_draft(self, final_text: str, context: str = "") -> str | None:
         """Lazily request a unique draft within this plan's hard call budget."""
+        self._check_cancelled()
         # Repeat rewrites delete the restored source too. Code-point counts
         # cannot safely predict native deletion units for Unicode graphemes.
         if not final_text.isascii() or not final_text.isprintable():
@@ -1188,11 +1210,13 @@ class TypingPlanner:
         if (not self._ai_rewriter or not self._ai_rewriter.is_enabled
                 or self._draft_requests >= self.MAX_DRAFT_REQUESTS_PER_PLAN):
             return None
+        self._check_cancelled()
         self._draft_requests += 1
         # Cache failures as well: an unavailable draft must not repeatedly spend
         # the budget on the same span. AIRewriter handles API failures locally.
         self._draft_cache[final_text] = None
         draft = self._ai_rewriter.generate_first_draft(final_text, context)
+        self._check_cancelled()
         if (isinstance(draft, str) and draft and draft != final_text
                 and draft.isascii() and draft.isprintable()):
             self._draft_cache[final_text] = draft
