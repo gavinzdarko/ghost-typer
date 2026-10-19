@@ -88,6 +88,11 @@
 <script>
 let startTime = 0, started = false, lastTime = 0, lastBsTime = 0;
 let charCount = 0, bsCount = 0;
+let finished = false, finishTime = null;
+
+function elapsedSeconds() {
+  return started ? ((finishTime ?? performance.now()) - startTime) / 1000 : 0;
+}
 const ikis = [], bsIkis = [], pauses = [], bursts = [];
 const digraphs = {};
 let prevChar = '', currentBurst = [], timerInterval = null;
@@ -95,6 +100,8 @@ let prevChar = '', currentBurst = [], timerInterval = null;
 const area = document.getElementById('typing-area');
 
 area.addEventListener('keydown', e => {
+  if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
+  if (e.key.length !== 1 && e.key !== 'Backspace' && e.key !== 'Enter') return;
   const now = performance.now();
   if (!started) { started = true; startTime = now; startTimer(); }
   const iki = lastTime > 0 ? now - lastTime : 0;
@@ -105,7 +112,7 @@ area.addEventListener('keydown', e => {
     lastBsTime = now;
     prevChar = '';
     flushBurst();
-  } else if (e.key.length === 1) {
+  } else if (e.key.length === 1 || e.key === 'Enter') {
     charCount++;
     lastBsTime = 0;
     if (iki > 0) {
@@ -120,9 +127,9 @@ area.addEventListener('keydown', e => {
       // burst
       if (iki < 150) { currentBurst.push(iki); } else { flushBurst(); }
     }
-    prevChar = e.key;
+    prevChar = e.key === 'Enter' ? '' : e.key;
   }
-  lastTime = now;
+  lastTime = e.key === 'Backspace' ? 0 : now;
   updateLive();
 });
 
@@ -139,8 +146,7 @@ function startTimer() {
 }
 
 function updateLive() {
-  if (!started) return;
-  const t = (performance.now() - startTime) / 1000;
+  const t = elapsedSeconds();
   const text = area.value;
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
@@ -163,8 +169,16 @@ function std(arr) { if (arr.length<2) return 0; const m=avg(arr); return Math.sq
 function ft(id, rows) { document.getElementById(id).innerHTML = rows.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join(''); }
 
 function showResults() {
+  if (!started) return;
+  if (!finished) {
+    finishTime = performance.now();
+    finished = true;
+    area.readOnly = true;
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  }
   flushBurst();
-  const t = (performance.now() - startTime) / 1000;
+  updateLive();
+  const t = elapsedSeconds();
   const words = area.value.trim().split(/\s+/).filter(Boolean).length;
   const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
   const errRate = (charCount + bsCount) > 0 ? bsCount / (charCount + bsCount) : 0;
@@ -228,7 +242,7 @@ function showResults() {
 
 function buildJSON() {
   flushBurst();
-  const t = (performance.now() - startTime) / 1000;
+  const t = elapsedSeconds();
   const words = area.value.trim().split(/\s+/).filter(Boolean).length;
   const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
   const diAvg = {};
@@ -254,6 +268,7 @@ function copyData() {
 }
 
 function reset() {
+  finished = false; finishTime = null; startTime = 0; area.readOnly = false;
   started = false; lastTime = 0; lastBsTime = 0; charCount = 0; bsCount = 0;
   ikis.length = 0; bsIkis.length = 0; pauses.length = 0; bursts.length = 0;
   Object.keys(digraphs).forEach(k => delete digraphs[k]);

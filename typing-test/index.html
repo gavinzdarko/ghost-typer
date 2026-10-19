@@ -229,6 +229,11 @@ let typed = [];
 let started = false;
 let finished = false;
 let startTime = 0;
+let finishTime = null;
+
+function elapsedSeconds() {
+  return started ? ((finishTime ?? performance.now()) - startTime) / 1000 : 0;
+}
 
 // Raw data collection
 const keystrokes = [];       // { time, key, correct, expected, pos }
@@ -258,6 +263,8 @@ function init() {
   typed = [];
   started = false;
   finished = false;
+  finishTime = null;
+  startTime = 0;
   cursorPos = 0;
   totalKeystrokes = 0;
   errorKeystrokes = 0;
@@ -308,16 +315,16 @@ const typingInput = document.getElementById('typing-input');
 
 promptCard.addEventListener('click', () => { typingInput.focus(); });
 document.addEventListener('keydown', (e) => {
-  if (finished) return;
-  if (e.key === 'Tab' || e.key === 'Escape') return;
+  if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
+  if (e.key.length !== 1 && e.key !== 'Backspace') return;
   if (!started && e.key.length === 1) {
     typingInput.focus();
   }
 });
 
 typingInput.addEventListener('keydown', (e) => {
-  if (finished) return;
-  if (e.key === 'Tab' || e.key === 'Escape') return;
+  if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
+  if (e.key.length !== 1 && e.key !== 'Backspace') return;
   e.preventDefault();
 
   const now = performance.now();
@@ -339,7 +346,7 @@ typingInput.addEventListener('keydown', (e) => {
     handleChar(e.key, now, iki);
   }
 
-  lastKeystrokeTime = now;
+  lastKeystrokeTime = e.key === 'Backspace' ? 0 : now;
   renderPrompt();
   updateLiveStats();
 
@@ -383,11 +390,7 @@ function handleChar(key, now, iki) {
     if (iki < 150) {
       currentBurstIkis.push(iki);
     } else {
-      if (currentBurstIkis.length >= 3) {
-        const avg = currentBurstIkis.reduce((a,b) => a+b, 0) / currentBurstIkis.length;
-        bursts.push({ length: currentBurstIkis.length, avgIki: avg });
-      }
-      currentBurstIkis = [];
+      flushBurst();
     }
   }
 
@@ -408,6 +411,7 @@ function handleChar(key, now, iki) {
 
 function handleBackspace(now, iki) {
   if (cursorPos <= 0) return;
+  flushBurst();
 
   totalKeystrokes++;
   keystrokes.push({ time: now - startTime, key: 'Backspace', correct: true, expected: '', pos: cursorPos });
@@ -430,6 +434,14 @@ function handleBackspace(now, iki) {
   typed.length = cursorPos;
 }
 
+function flushBurst() {
+  if (currentBurstIkis.length >= 3) {
+    const avg = currentBurstIkis.reduce((a,b) => a+b, 0) / currentBurstIkis.length;
+    bursts.push({ length: currentBurstIkis.length, avgIki: avg });
+  }
+  currentBurstIkis = [];
+}
+
 // ── Live stats ──
 let liveTimerInterval = null;
 function startLiveTimer() {
@@ -443,10 +455,10 @@ function startLiveTimer() {
 }
 
 function recordTimeSlice() {
-  const elapsed = (performance.now() - startTime) / 1000;
+  const elapsed = elapsedSeconds();
   if (elapsed < 1) return;
   const words = cursorPos / 5;
-  const wpm = Math.round((words / elapsed) * 60);
+  const wpm = elapsed > 0 ? Math.round((words / elapsed) * 60) : 0;
   const errRate = totalKeystrokes > 0 ? errorKeystrokes / totalKeystrokes : 0;
   // Record every 5 seconds
   if (wpmOverTime.length === 0 || elapsed - wpmOverTime[wpmOverTime.length - 1].time >= 5) {
@@ -455,7 +467,7 @@ function recordTimeSlice() {
 }
 
 function updateLiveStats() {
-  const elapsed = started ? (performance.now() - startTime) / 1000 : 0;
+  const elapsed = elapsedSeconds();
   const words = cursorPos / 5;
   const wpm = elapsed > 0 ? Math.round((words / elapsed) * 60) : 0;
   const accuracy = totalKeystrokes > 0 ? Math.round((1 - errorKeystrokes / totalKeystrokes) * 100) : 100;
@@ -472,24 +484,23 @@ function updateLiveStats() {
 
 // ── Finish ──
 function finish() {
+  if (finished || !started) return;
+  finishTime = performance.now();
   finished = true;
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
   // Final time slice
   recordTimeSlice();
   // Flush final burst
-  if (currentBurstIkis.length >= 3) {
-    const avg = currentBurstIkis.reduce((a,b) => a+b, 0) / currentBurstIkis.length;
-    bursts.push({ length: currentBurstIkis.length, avgIki: avg });
-  }
+  flushBurst();
   updateLiveStats();
   showSummary();
 }
 
 // ── Summary ──
 function showSummary() {
-  const elapsed = (performance.now() - startTime) / 1000;
+  const elapsed = elapsedSeconds();
   const words = cursorPos / 5;
-  const wpm = Math.round((words / elapsed) * 60);
+  const wpm = elapsed > 0 ? Math.round((words / elapsed) * 60) : 0;
   const accuracy = totalKeystrokes > 0 ? (1 - errorKeystrokes / totalKeystrokes) : 1;
   const errorRate = 1 - accuracy;
 
@@ -775,7 +786,7 @@ function drawLineChart(canvasId, data) {
 
 // ── JSON export ──
 function buildConfigJSON() {
-  const elapsed = (performance.now() - startTime) / 1000;
+  const elapsed = elapsedSeconds();
   const wpm = Math.round((cursorPos / 5 / elapsed) * 60);
   const errorRate = totalKeystrokes > 0 ? errorKeystrokes / totalKeystrokes : 0;
 
