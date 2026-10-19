@@ -90,11 +90,14 @@ Rules:
 class AIPlanner:
     """Uses Claude to generate intelligent, realistic typing plans."""
 
+    MAX_INPUT_CHARS = 6_000
+    MAX_OUTPUT_TOKENS = 8_192
+
     def __init__(self, settings: Settings | None = None, api_key: str | None = None, *, enabled: bool = True):
         self.settings = settings or Settings()
         self._api_key = (api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")) if enabled else None
         self._client: Optional[anthropic.Anthropic] = None
-        self._fallback_planner = TypingPlanner(self.settings, ai_enabled=enabled, api_key=api_key)
+        self._fallback_planner = TypingPlanner(self.settings, ai_enabled=False)
         self._enabled = bool(self._api_key)
 
         if self._api_key:
@@ -113,12 +116,13 @@ class AIPlanner:
 
     def update_settings(self, settings: Settings) -> None:
         self.settings = settings
-        self._fallback_planner = TypingPlanner(settings, ai_enabled=self._enabled, api_key=self._api_key)
+        self._fallback_planner = TypingPlanner(settings, ai_enabled=False)
 
     def plan(self, segments: list[TextSegment]) -> TypingPlan:
         """Generate a typing plan using Claude AI, falling back to rule-based if needed."""
-        if not self.is_enabled:
-            logger.info("AI planner disabled, using rule-based fallback")
+        character_count = sum(len(segment.text) for segment in segments)
+        if not self.is_enabled or not character_count or character_count > self.MAX_INPUT_CHARS:
+            logger.info("Using rule-based fallback for disabled or out-of-budget AI plan")
             return self._fallback_planner.plan(segments)
 
         try:
@@ -173,7 +177,7 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
 
         response = self._client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=16384,
+            max_tokens=min(self.MAX_OUTPUT_TOKENS, max(512, len(full_text) * 3)),
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
             timeout=120.0,
@@ -504,6 +508,11 @@ class AIRewriter:
     """Uses Claude to generate plausible 'first draft' versions of text
     that a human might type before deleting and rewriting better."""
 
+    MAX_SPAN_CHARS = 2_000
+    MAX_CONTEXT_CHARS = 1_000
+    MAX_BATCH_CHARS = 8_000
+    MAX_BATCH_SPANS = 16
+    MAX_REVISIT_CHARS = 8_000
     MAX_CACHE_ENTRIES = 64
     MAX_CACHE_CHARS = 32_768
 
@@ -533,8 +542,9 @@ class AIRewriter:
         Returns:
             A plausible first-draft version, or None if AI is unavailable.
         """
-        if not self.is_enabled:
+        if not self.is_enabled or not final_text.strip() or len(final_text) > self.MAX_SPAN_CHARS:
             return None
+        context = context[:self.MAX_CONTEXT_CHARS]
 
         # Check cache
         if final_text in self._cache:
@@ -559,6 +569,8 @@ class AIRewriter:
                     "content": f"Final version: {final_text}\nContext: {context}\n\nFirst draft:",
                 }],
             )
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                return None
             draft = response.content[0].text.strip()
             # Sanity check — draft should be similar length
             if 0.3 < len(draft) / max(len(final_text), 1) < 2.5:
@@ -588,14 +600,20 @@ class AIRewriter:
         uncached_indices: list[int] = []
         uncached_spans: list[dict[str, str]] = []
 
+        batch_chars = 0
         for i, span in enumerate(spans):
             text = span.get("text", "")
+            if not text.strip() or len(text) > self.MAX_SPAN_CHARS:
+                continue
+            context = span.get("context", "")[:self.MAX_CONTEXT_CHARS]
             if text in self._cache:
                 self._cache.move_to_end(text)
                 results[i] = self._cache[text]
-            else:
+            elif (len(uncached_spans) < self.MAX_BATCH_SPANS
+                  and batch_chars + len(text) + len(context) <= self.MAX_BATCH_CHARS):
                 uncached_indices.append(i)
-                uncached_spans.append(span)
+                uncached_spans.append({"text": text, "context": context})
+                batch_chars += len(text) + len(context)
 
         if not uncached_spans:
             return results
@@ -631,6 +649,8 @@ class AIRewriter:
                 }],
             )
 
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                return results
             response_text = response.content[0].text.strip()
 
             # Parse JSON array
@@ -667,8 +687,10 @@ class AIRewriter:
             - 'revised': what to replace it with
             - 'reason': why the teen would change it (for logging)
         """
-        if not self.is_enabled or not typed_so_far or len(typed_so_far) < 50:
+        if not self.is_enabled or len(typed_so_far) < 50 or num_targets <= 0:
             return []
+        num_targets = min(num_targets, 3)
+        typed_so_far = typed_so_far[-self.MAX_REVISIT_CHARS:]
 
         try:
             response = self._client.messages.create(
@@ -1023,7 +1045,7 @@ class AIProfileGenerator:
 
         Falls back to TypingProfile.defaults() on any failure.
         """
-        if not self.is_enabled:
+        if not self.is_enabled or not text.strip():
             return TypingProfile.defaults()
 
         import hashlib
@@ -1081,7 +1103,7 @@ class AIProfileGenerator:
 
         Returns a dict with behavioral data, or empty dict on failure.
         """
-        if not self.is_enabled:
+        if not self.is_enabled or not text.strip():
             return {}
 
         try:

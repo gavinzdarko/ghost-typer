@@ -10,6 +10,6 @@ def test_every_paid_client_disables_hidden_sdk_retries():
         clients = [AIPlanner(api_key='test'), AIProfileGenerator(api_key='test'),
                    AIRewriter(api_key='test'), HumanErrors(api_key='test')]
         assert all(c.is_enabled for c in clients)
-        assert client.call_count == 5  # Includes AIPlanner's nested HumanErrors.
+        assert client.call_count == 4  # AIPlanner fallback is entirely local.
         assert all(call.kwargs == {'api_key': 'test', 'max_retries': 0}
                    for call in client.call_args_list)
