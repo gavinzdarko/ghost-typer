@@ -91,6 +91,7 @@ class GhostTyperApp(rumps.App):
 
         # Auto-pause tracking
         self._menu_auto_paused = False
+        self._settings_modal_active = False
 
         # Set up menu delegate to pause typing while dropdown is open
         self._menu_delegate = _MenuDelegate.alloc().init()
@@ -271,28 +272,37 @@ class GhostTyperApp(rumps.App):
                     item.title = f"{display_name}: {fn(new_val)}"
                     logger.info("Setting %s changed to %s", key, new_val)
                 except (ValueError, TypeError):
-                    rumps.alert("Invalid value", f"Could not parse '{response.text}' as {typ.__name__}")
+                    self.orchestrator.notification_service.notify_error(
+                        f"Invalid {name} value; enter a valid {typ.__name__}."
+                    )
         return callback
 
     def _run_settings_window(self, window):
         """Keep synthetic keys and clipboard capture outside modal settings."""
-        state = self.orchestrator.state
-        if state in (OrchestratorState.PLANNING, OrchestratorState.VERIFYING):
-            self.orchestrator.notification_service.notify_error(
-                "Wait for planning or verification to finish before opening settings."
-            )
-            return None
-        simulator = self.orchestrator._simulator
-        resume_after = state == OrchestratorState.TYPING and simulator is not None
-        if resume_after:
-            self.orchestrator.pause()
+        # Capture the state after excluding clipboard callbacks: a paste that
+        # won this lock may already have launched planning and must be noticed.
+        self._settings_modal_active = True
         try:
             with self.orchestrator.clipboard_monitor.suspended():
-                return window.run()
+                state = self.orchestrator.state
+                if state in (OrchestratorState.PLANNING, OrchestratorState.VERIFYING):
+                    self.orchestrator.notification_service.notify_error(
+                        "Wait for planning or verification to finish before opening settings."
+                    )
+                    return None
+                simulator = self.orchestrator._simulator
+                resume_after = state == OrchestratorState.TYPING and simulator is not None
+                if resume_after:
+                    self.orchestrator.pause()
+                try:
+                    return window.run()
+                finally:
+                    if (resume_after and self.orchestrator._simulator is simulator
+                            and self.orchestrator.state == OrchestratorState.PAUSED):
+                        self.orchestrator.resume()
+
         finally:
-            if (resume_after and self.orchestrator._simulator is simulator
-                    and self.orchestrator.state == OrchestratorState.PAUSED):
-                self.orchestrator.resume()
+            self._settings_modal_active = False
 
     def _make_toggle_callback(self, key: str):
         """Create a callback that toggles a boolean setting."""
@@ -413,7 +423,7 @@ class GhostTyperApp(rumps.App):
 
     def _hotkey_toggle_pause(self) -> None:
         """F6 pressed — toggle pause/resume."""
-        if self._shutting_down:
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         state = self.orchestrator.state
         if state == OrchestratorState.TYPING:
@@ -430,7 +440,7 @@ class GhostTyperApp(rumps.App):
 
     def _hotkey_paste(self) -> None:
         """Cmd+V pressed — trigger typing of staged clipboard content."""
-        if self._shutting_down:
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         # In table fill mode, content is already queued on copy — Cmd+V is a no-op
         if self.orchestrator.table_fill_mode:
