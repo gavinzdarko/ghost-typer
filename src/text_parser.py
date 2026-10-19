@@ -141,12 +141,11 @@ class TextParser:
         if isinstance(node, NavigableString):
             text = str(node)
             # Collapse whitespace first (handles "\n  " from prettified HTML)
-            collapsed = re.sub(r"\s+", " ", text)
-            # Normalize non-breaking spaces
-            collapsed = collapsed.replace("\u00a0", " ")
-            if collapsed.strip() or collapsed == " ":
-                if collapsed:
-                    segments.append(TextSegment(text=collapsed, formatting=dict(inherited_fmt)))
+            # HTML collapses ASCII layout whitespace, while nonbreaking,
+            # thin, and em spaces remain visible source characters.
+            collapsed = re.sub(r"[ \t\r\n\f]+", " ", text)
+            if collapsed:
+                segments.append(TextSegment(text=collapsed, formatting=dict(inherited_fmt)))
             return
 
         if not isinstance(node, Tag):
@@ -355,12 +354,12 @@ class TextParser:
             preserved = seg.formatting.get("preformatted")
             if is_break:
                 # Source indentation between blocks is not visible HTML text.
-                while (cleaned and not cleaned[-1].text.strip()
+                while (cleaned and not cleaned[-1].text.strip(" \t\r\n\f")
                        and not cleaned[-1].formatting.get("paragraph_break")
                        and not cleaned[-1].formatting.get("linebreak")
                        and not cleaned[-1].formatting.get("preformatted")):
                     cleaned.pop()
-            elif not preserved and not seg.text.strip():
+            elif not preserved and not seg.text.strip(" \t\r\n\f"):
                 if not cleaned or cleaned[-1].formatting.get("paragraph_break") or cleaned[-1].formatting.get("linebreak"):
                     continue
 
@@ -386,9 +385,9 @@ class TextParser:
             cleaned.append(seg)
 
         # Strip leading/trailing whitespace-only segments
-        while cleaned and cleaned[0].text.strip() == "" and cleaned[0].formatting.get("paragraph_break") and not cleaned[0].formatting.get("explicit_break_count"):
+        while cleaned and cleaned[0].text.strip(" \t\r\n\f") == "" and cleaned[0].formatting.get("paragraph_break") and not cleaned[0].formatting.get("explicit_break_count"):
             cleaned.pop(0)
-        while (cleaned and not cleaned[-1].text.strip()
+        while (cleaned and not cleaned[-1].text.strip(" \t\r\n\f")
                and not cleaned[-1].formatting.get("preformatted")
                and not cleaned[-1].formatting.get("linebreak")):
             cleaned.pop()
@@ -396,7 +395,7 @@ class TextParser:
         # Strip trailing whitespace from segments before breaks
         for i in range(len(cleaned) - 1):
             if not cleaned[i].formatting.get("preformatted") and (cleaned[i + 1].formatting.get("paragraph_break") or cleaned[i + 1].formatting.get("linebreak")):
-                cleaned[i].text = cleaned[i].text.rstrip()
+                cleaned[i].text = cleaned[i].text.rstrip(" \t\r\n\f")
 
         # Merge adjacent text segments into larger plain-text chunks.
         merged: list[TextSegment] = []
