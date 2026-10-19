@@ -462,7 +462,7 @@ class GhostTyperApp(rumps.App):
 
     def _hotkey_toggle_enabled(self) -> None:
         """Ctrl+F6 pressed — toggle on/off."""
-        if self._shutting_down:
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         if self.orchestrator.is_enabled:
             self.orchestrator.disable(blocking=False)

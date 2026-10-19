@@ -71,7 +71,7 @@ def test_paste_that_wins_the_clipboard_lock_blocks_modal_opening():
     window.run.assert_not_called()
 
 
-@pytest.mark.parametrize('name', ['_hotkey_toggle_pause', '_hotkey_paste'])
+@pytest.mark.parametrize('name', ['_hotkey_toggle_pause', '_hotkey_paste', '_hotkey_toggle_enabled'])
 def test_hotkeys_do_not_resume_or_launch_typing_inside_modal_settings(name):
     tree = ast.parse((Path(__file__).resolve().parents[1] / 'src/menu_bar_app.py').read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'GhostTyperApp')
