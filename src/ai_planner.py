@@ -272,9 +272,11 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
         chars_per_sec = (self.settings.wpm * 5) / 60
         est_duration = total_chars / chars_per_sec if chars_per_sec > 0 else 0
 
-        # Safety: fix missing spaces between consecutive TypeText actions
-        # (Claude often drops trailing spaces when splitting sentences)
-        actions = self._fix_missing_spaces(actions)
+        # Model instructions are not a guarantee: replay edits before allowing
+        # any generated keystrokes to touch the destination document.
+        intended = "".join(segment.text for segment in original_segments)
+        if self._render_actions(actions) != intended:
+            raise ValueError("AI typing plan does not reproduce the source text")
 
         # Recount chars after fix
         total_chars = sum(
@@ -327,6 +329,7 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
             correct = act.get("correct", "")
             notice_after = int(act.get("chars_before_noticing", 0))
             if wrong and correct:
+                self._validate_edit_text(wrong, correct)
                 actions.append(MakeMistake(
                     wrong_text=wrong,
                     correct_text=correct,
@@ -338,6 +341,7 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
             first_attempt = act.get("first_attempt", "")
             final_version = act.get("final_version", "")
             if first_attempt and final_version:
+                self._validate_edit_text(first_attempt, final_version)
                 # Type the first attempt
                 actions.append(TypeText(text=first_attempt))
                 # Pause to "re-read"
@@ -360,42 +364,39 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
         return actions, chars
 
     @staticmethod
-    def _fix_missing_spaces(actions: list[TypingAction]) -> list[TypingAction]:
-        """Fix missing spaces between consecutive TypeText actions.
+    def _validate_edit_text(*texts: str) -> None:
+        # Controls can change fields, and native editors delete graphemes
+        # rather than Python code points. Only inline ASCII edits have the
+        # deletion semantics used by MakeMistake and Rewrite. Direct source
+        # typing remains Unicode-capable.
+        if any(not isinstance(text, str) or not text.isascii() or not text.isprintable()
+               for text in texts):
+            raise ValueError("AI temporary edits require printable ASCII text")
 
-        Claude often generates plans where "sentence." and "Next" are separate
-        type actions with no space between them. This inserts the missing space.
-        """
-        fixed: list[TypingAction] = []
-        for i, action in enumerate(actions):
-            fixed.append(action)
-            # Check if this TypeText ends without a space and the next TypeText
-            # starts with a letter (missing space between sentences/words)
-            if isinstance(action, TypeText) and action.text:
-                # Find the next TypeText action (skip pauses etc.)
-                next_type = None
-                for j in range(i + 1, len(actions)):
-                    if isinstance(actions[j], TypeText):
-                        next_type = actions[j]
-                        break
-                    elif isinstance(actions[j], (MakeMistake,)):
-                        # MakeMistake starts typing — check its wrong_text
-                        break
-                    elif isinstance(actions[j], (Pause,)):
-                        continue
-                    else:
-                        break
+    @staticmethod
+    def _render_actions(actions: list[TypingAction]) -> str:
+        """Replay the final document, accounting for temporary drafts and edits."""
+        output: list[str] = []
 
-                if next_type and next_type.text:
-                    last_char = action.text[-1]
-                    first_char = next_type.text[0]
-                    # If current ends with punctuation or letter and next starts
-                    # with a letter, and there's no space — add one
-                    if (last_char in ".!?,;:" or last_char.isalnum()) and first_char.isalnum():
-                        if not action.text[-1].isspace():
-                            action.text += " "
+        def replay(items):
+            for action in items:
+                if isinstance(action, TypeText):
+                    output.extend(action.text)
+                elif isinstance(action, MakeMistake):
+                    output.extend(action.correct_text)
+                elif isinstance(action, PressKey):
+                    if action.key != "enter":
+                        raise ValueError("Unsupported AI key action")
+                    output.append("\n")
+                elif isinstance(action, Rewrite):
+                    if not 0 <= action.delete_count <= len(output):
+                        raise ValueError("AI rewrite deletes outside its text")
+                    if action.delete_count:
+                        del output[-action.delete_count:]
+                    replay(action.new_actions)
 
-        return fixed
+        replay(actions)
+        return "".join(output)
 
     def _find_formatting(self, text: str, seg_formats: dict) -> dict:
         """Find the best matching formatting for a text segment."""
