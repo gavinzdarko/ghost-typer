@@ -91,7 +91,7 @@ class TextParser:
             # metadata instead of trying to replace it a second time.
             if tag.parent is None:
                 continue
-            tag.replace_with(" ")
+            tag.replace_with("")
 
         # Strip citation <sup> tags specifically (preserve legitimate superscripts like x²)
         for sup in soup.find_all("sup"):
@@ -99,7 +99,7 @@ class TextParser:
             text_content = sup.get_text()
             if ("reference" in classes or "noprint" in classes
                     or self._SUP_CITATION_RE.match(text_content)):
-                sup.replace_with(" ")
+                sup.replace_with("")
 
         body = soup.body if soup.body else soup
         segments: list[TextSegment] = []
