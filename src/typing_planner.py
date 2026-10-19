@@ -261,6 +261,7 @@ class TypingPlanner:
         # Detect thought boundaries via AI
         if not simple:
             full_text = "".join(seg.text for seg in segments)
+            self._check_cancelled()
             self._thought_boundaries = set(
                 self._human_errors.find_thought_boundaries(full_text)
             )
@@ -356,6 +357,7 @@ class TypingPlanner:
 
         # --- Apply human errors (grammar, punctuation, spelling that stay in) ---
         if self.settings.grammar_error_rate > 0 or self.settings.punctuation_error_rate > 0:
+            self._check_cancelled()
             modified_text, misspellings = self._human_errors.process_text(segment.text)
             self._check_cancelled()
             self._remap_source_annotations(segment.text, modified_text, self._char_position)
@@ -956,6 +958,7 @@ class TypingPlanner:
             return []
 
         # Ask AI to pick revision targets from what's been typed so far
+        self._check_cancelled()
         self._revisit_requests = getattr(self, "_revisit_requests", 0) + 1
         targets = self._ai_rewriter.pick_revisit_targets(
             typed_so_far[-2048:], num_targets=self._rng.randint(1, 2)
@@ -1207,6 +1210,7 @@ class TypingPlanner:
         if (not self._ai_rewriter or not self._ai_rewriter.is_enabled
                 or self._draft_requests >= self.MAX_DRAFT_REQUESTS_PER_PLAN):
             return None
+        self._check_cancelled()
         self._draft_requests += 1
         # Cache failures as well: an unavailable draft must not repeatedly spend
         # the budget on the same span. AIRewriter handles API failures locally.

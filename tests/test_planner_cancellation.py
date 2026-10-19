@@ -43,3 +43,19 @@ def test_already_cancelled_plan_spends_no_requests():
     with pytest.raises(PlanningCancelled):
         planner.plan([TextSegment('source')], cancelled=lambda: True)
     planner._human_errors.find_thought_boundaries.assert_not_called()
+
+
+def test_cancel_during_local_preparation_skips_the_first_paid_call(monkeypatch):
+    import src.typing_planner as module
+    stopped = threading.Event()
+    planner = TypingPlanner(ai_enabled=False)
+    validate = module.validate_behavioral_content
+    def cancelled_validation(*args):
+        value = validate(*args)
+        stopped.set()
+        return value
+    monkeypatch.setattr(module, 'validate_behavioral_content', cancelled_validation)
+    planner._human_errors.find_thought_boundaries = Mock()
+    with pytest.raises(PlanningCancelled):
+        planner.plan([TextSegment('source')], cancelled=stopped.is_set)
+    planner._human_errors.find_thought_boundaries.assert_not_called()
