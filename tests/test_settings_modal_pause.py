@@ -128,3 +128,17 @@ def test_menu_close_cannot_resume_a_modal_owned_pause():
                              _menu_auto_paused=True, orchestrator=Mock(state=OrchestratorState.PAUSED))
     scope['menuDidClose_'](SimpleNamespace(_app_ref=target), None)
     target.orchestrator.resume.assert_not_called()
+
+
+def test_modal_takes_ownership_of_a_menu_pause_and_resumes_after_closing():
+    target = app(OrchestratorState.PAUSED)
+    target._menu_auto_paused = True
+    window = Mock()
+    def run():
+        assert target._menu_auto_paused is False
+        target.orchestrator.resume.assert_not_called()
+        return 'closed'
+    window.run.side_effect = run
+    assert modal_method()(target, window) == 'closed'
+    target.orchestrator.pause.assert_not_called()
+    target.orchestrator.resume.assert_called_once()
