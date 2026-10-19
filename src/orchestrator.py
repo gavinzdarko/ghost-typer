@@ -641,7 +641,7 @@ class Orchestrator:
             )
 
             # Build the full intended text for verification later
-            intended_text = " ".join(seg.text for seg in segments if seg.text.strip())
+            intended_text = "".join(seg.text for seg in segments)
 
             # Notify start
             self.notification_service.notify_start(self._current_word_count)
