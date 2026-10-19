@@ -70,7 +70,8 @@ class _MenuDelegate(AppKit.NSObject):
         if app and not app._shutting_down:
             if getattr(app, '_menu_auto_paused', False):
                 app._menu_auto_paused = False
-                if app.orchestrator.state == OrchestratorState.PAUSED:
+                if (app.orchestrator.state == OrchestratorState.PAUSED
+                        and not getattr(app, '_settings_modal_active', False)):
                     app.orchestrator.resume()
                     logger.info("Auto-resumed typing (menu closed)")
 
@@ -89,6 +90,7 @@ class GhostTyperApp(rumps.App):
 
         # Auto-pause tracking
         self._menu_auto_paused = False
+        self._settings_modal_active = False
 
         # Set up menu delegate to pause typing while dropdown is open
         self._menu_delegate = _MenuDelegate.alloc().init()
@@ -214,7 +216,9 @@ class GhostTyperApp(rumps.App):
                 cancel="Cancel",
                 dimensions=(200, 24),
             )
-            response = window.run()
+            response = self._run_settings_window(window)
+            if response is None:
+                return
             if response.clicked:
                 try:
                     new_val = parse_numeric_setting(key, response.text)
@@ -230,8 +234,53 @@ class GhostTyperApp(rumps.App):
                     item.title = f"{display_name}: {fn(new_val)}"
                     logger.info("Setting %s changed to %s", key, new_val)
                 except (ValueError, TypeError):
-                    rumps.alert("Invalid value", f"Could not parse '{response.text}' as {typ.__name__}")
+                    self.orchestrator.notification_service.notify_error(
+                        f"Invalid {name} value; enter a valid {typ.__name__}."
+                    )
         return callback
+
+    def _run_settings_window(self, window):
+        """Keep synthetic keys and clipboard capture outside modal settings."""
+        # Capture the state after excluding clipboard callbacks: a paste that
+        # won this lock may already have launched planning and must be noticed.
+        self._settings_modal_active = True
+        try:
+            with self.orchestrator.clipboard_monitor.suspended(blocking=False):
+                state = self.orchestrator.state
+                if state in (OrchestratorState.PLANNING, OrchestratorState.VERIFYING):
+                    self.orchestrator.notification_service.notify_error(
+                        "Wait for planning or verification to finish before opening settings."
+                    )
+                    return None
+                simulator = self.orchestrator._simulator
+                if state == OrchestratorState.TYPING and simulator is None:
+                    self.orchestrator.notification_service.notify_error(
+                        "Wait for the typing session to become ready before opening settings."
+                    )
+                    return None
+                menu_pause = getattr(self, '_menu_auto_paused', False)
+                resume_after = simulator is not None and (
+                    state == OrchestratorState.TYPING
+                    or state == OrchestratorState.PAUSED and menu_pause
+                )
+                if menu_pause:
+                    self._menu_auto_paused = False
+                if state == OrchestratorState.TYPING and resume_after:
+                    self.orchestrator.pause()
+                try:
+                    return window.run()
+                finally:
+                    if (resume_after and self.orchestrator._simulator is simulator
+                            and self.orchestrator.state == OrchestratorState.PAUSED):
+                        self.orchestrator.resume()
+
+        except BlockingIOError:
+            self.orchestrator.notification_service.notify_error(
+                "Clipboard is busy; finish or stop the current operation before opening settings."
+            )
+            return None
+        finally:
+            self._settings_modal_active = False
 
     def _make_toggle_callback(self, key: str):
         """Create a callback that toggles a boolean setting."""
@@ -280,6 +329,8 @@ class GhostTyperApp(rumps.App):
 
     def _pause_resume(self, sender: rumps.MenuItem) -> None:
         """Pause or resume current typing."""
+        if getattr(self, '_settings_modal_active', False):
+            return
         state = self.orchestrator.state
         if state == OrchestratorState.TYPING:
             self.orchestrator.pause()
@@ -352,7 +403,7 @@ class GhostTyperApp(rumps.App):
 
     def _hotkey_toggle_pause(self) -> None:
         """F6 pressed — toggle pause/resume."""
-        if self._shutting_down:
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         state = self.orchestrator.state
         if state == OrchestratorState.TYPING:
@@ -369,7 +420,7 @@ class GhostTyperApp(rumps.App):
 
     def _hotkey_paste(self) -> None:
         """Cmd+V pressed — trigger typing of staged clipboard content."""
-        if self._shutting_down:
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         # In table fill mode, content is already queued on copy — Cmd+V is a no-op
         if self.orchestrator.table_fill_mode:
@@ -378,7 +429,7 @@ class GhostTyperApp(rumps.App):
 
     def _hotkey_toggle_enabled(self) -> None:
         """Ctrl+F6 pressed — toggle on/off."""
-        if self._shutting_down:
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         if self.orchestrator.is_enabled:
             self.orchestrator.disable(blocking=False)

@@ -1,0 +1,144 @@
+import ast
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+from src.orchestrator import OrchestratorState
+
+
+def modal_method():
+    tree = ast.parse((Path(__file__).resolve().parents[1] / 'src/menu_bar_app.py').read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'GhostTyperApp')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_run_settings_window')
+    scope = {'OrchestratorState': OrchestratorState}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), '<modal>', 'exec'), scope)
+    return scope['_run_settings_window']
+
+
+def app(state):
+    orch = Mock(state=state, _simulator=object())
+    orch.clipboard_monitor.suspended.return_value = nullcontext()
+    orch.pause.side_effect = lambda: setattr(orch, 'state', OrchestratorState.PAUSED)
+    return SimpleNamespace(orchestrator=orch)
+
+
+def test_typing_stays_paused_for_the_entire_dialog():
+    target = app(OrchestratorState.TYPING)
+    window = Mock()
+    window.run.side_effect = lambda: target.orchestrator.state
+    assert modal_method()(target, window) == OrchestratorState.PAUSED
+    target.orchestrator.resume.assert_called_once()
+
+
+@pytest.mark.parametrize('state', [OrchestratorState.PLANNING, OrchestratorState.VERIFYING])
+def test_non_typing_workers_cannot_start_keys_inside_a_settings_dialog(state):
+    target = app(state)
+    window = Mock()
+    assert modal_method()(target, window) is None
+    window.run.assert_not_called()
+
+
+def test_manual_pause_and_cancelled_sessions_are_not_resumed():
+    for state in (OrchestratorState.PAUSED, OrchestratorState.TYPING):
+        target = app(state)
+        window = Mock()
+        window.run.side_effect = lambda: setattr(target.orchestrator, 'state', OrchestratorState.IDLE)
+        modal_method()(target, window)
+        target.orchestrator.resume.assert_not_called()
+
+
+def test_dialog_failure_restores_only_the_owned_pause():
+    target = app(OrchestratorState.TYPING)
+    window = Mock()
+    window.run.side_effect = RuntimeError('dialog failed')
+    with pytest.raises(RuntimeError):
+        modal_method()(target, window)
+    target.orchestrator.resume.assert_called_once()
+    assert target._settings_modal_active is False
+
+
+def test_paste_that_wins_the_clipboard_lock_blocks_modal_opening():
+    target = app(OrchestratorState.IDLE)
+    @contextmanager
+    def pending_paste(**kwargs):
+        target.orchestrator.state = OrchestratorState.PLANNING
+        yield
+    target.orchestrator.clipboard_monitor.suspended.side_effect = pending_paste
+    window = Mock()
+    assert modal_method()(target, window) is None
+    window.run.assert_not_called()
+
+
+@pytest.mark.parametrize('name', ['_hotkey_toggle_pause', '_hotkey_paste', '_hotkey_toggle_enabled'])
+def test_hotkeys_do_not_resume_or_launch_typing_inside_modal_settings(name):
+    tree = ast.parse((Path(__file__).resolve().parents[1] / 'src/menu_bar_app.py').read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'GhostTyperApp')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name)
+    scope = {'OrchestratorState': OrchestratorState}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), '<hotkey>', 'exec'), scope)
+    target = SimpleNamespace(_shutting_down=False, _settings_modal_active=True, orchestrator=Mock())
+    scope[name](target)
+    assert target.orchestrator.mock_calls == []
+
+
+def test_transient_typing_without_a_simulator_does_not_open_a_dialog():
+    target = app(OrchestratorState.TYPING)
+    target.orchestrator._simulator = None
+    window = Mock()
+    assert modal_method()(target, window) is None
+    window.run.assert_not_called()
+    target.orchestrator.pause.assert_not_called()
+
+
+def test_paused_clipboard_probe_cannot_block_the_settings_ui():
+    import threading
+    from src.clipboard_monitor import ClipboardMonitor
+    monitor = ClipboardMonitor(Mock())
+    held = threading.Event()
+    release = threading.Event()
+    def transaction():
+        with monitor.suspended():
+            held.set()
+            release.wait(2)
+    worker = threading.Thread(target=transaction)
+    worker.start()
+    try:
+        assert held.wait(1)
+        target = app(OrchestratorState.PAUSED)
+        target.orchestrator.clipboard_monitor = monitor
+        window = Mock()
+        assert modal_method()(target, window) is None
+        window.run.assert_not_called()
+        assert target._settings_modal_active is False
+        assert worker.is_alive()  # modal did not wait for the paused probe
+    finally:
+        release.set()
+        worker.join(2)
+
+
+def test_menu_close_cannot_resume_a_modal_owned_pause():
+    tree = ast.parse((Path(__file__).resolve().parents[1] / 'src/menu_bar_app.py').read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == '_MenuDelegate')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'menuDidClose_')
+    scope = {'OrchestratorState': OrchestratorState, 'logger': Mock()}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), '<menu>', 'exec'), scope)
+    target = SimpleNamespace(_shutting_down=False, _settings_modal_active=True,
+                             _menu_auto_paused=True, orchestrator=Mock(state=OrchestratorState.PAUSED))
+    scope['menuDidClose_'](SimpleNamespace(_app_ref=target), None)
+    target.orchestrator.resume.assert_not_called()
+
+
+def test_modal_takes_ownership_of_a_menu_pause_and_resumes_after_closing():
+    target = app(OrchestratorState.PAUSED)
+    target._menu_auto_paused = True
+    window = Mock()
+    def run():
+        assert target._menu_auto_paused is False
+        target.orchestrator.resume.assert_not_called()
+        return 'closed'
+    window.run.side_effect = run
+    assert modal_method()(target, window) == 'closed'
+    target.orchestrator.pause.assert_not_called()
+    target.orchestrator.resume.assert_called_once()

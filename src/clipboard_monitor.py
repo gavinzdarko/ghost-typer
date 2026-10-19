@@ -92,14 +92,18 @@ class ClipboardMonitor:
         logger.info("Clipboard monitor %s", "enabled" if value else "disabled")
 
     @contextmanager
-    def suspended(self):
+    def suspended(self, *, blocking: bool = True):
         """Serialize internal pasteboard transactions without changing user ON/OFF."""
-        with self._clipboard_lock:
+        if not self._clipboard_lock.acquire(blocking=blocking):
+            raise BlockingIOError("Clipboard transaction is busy")
+        try:
             self._suspensions += 1
             try:
                 yield
             finally:
                 self._suspensions -= 1
+        finally:
+            self._clipboard_lock.release()
 
     def acknowledge_change(self, change_count: int) -> None:
         """Ignore a pasteboard revision written by an internal transaction."""
