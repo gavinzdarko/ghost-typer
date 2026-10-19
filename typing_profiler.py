@@ -159,6 +159,7 @@ class TypingAnalyzer:
     def __init__(self, events: list[KeyEvent]) -> None:
         self.events = events
         self.intervals: list[float] = []
+        self._interval_run_starts: set[int] = set()
         self.digraph_intervals: dict[str, list[float]] = defaultdict(list)
         self.char_intervals: dict[str, list[float]] = defaultdict(list)
         self.corrections: list[CorrectionEvent] = []
@@ -185,16 +186,23 @@ class TypingAnalyzer:
 
     def _compute_intervals(self) -> None:
         """Compute inter-key intervals and per-digraph/char timings."""
-        typing_events = [e for e in self.events if not e.is_backspace]
-        for i in range(1, len(typing_events)):
-            prev = typing_events[i - 1]
-            curr = typing_events[i]
+        new_run = True
+        for prev, curr in zip(self.events, self.events[1:]):
+            # Removing backspaces before pairing bridges an entire correction
+            # into a fictitious digraph and inflates the baseline key interval.
+            if prev.is_backspace or curr.is_backspace:
+                new_run = True
+                continue
             dt = curr.timestamp - prev.timestamp
 
             # Skip huge pauses for interval stats (those are "pauses", not typing speed)
-            if dt > 5.0:
+            if not 0 < dt <= 5.0:
+                new_run = True
                 continue
 
+            if new_run:
+                self._interval_run_starts.add(len(self.intervals))
+                new_run = False
             self.intervals.append(dt)
 
             # Per-character class
@@ -252,10 +260,9 @@ class TypingAnalyzer:
 
     def _detect_pauses(self) -> None:
         """Find significant pauses and classify them."""
-        typing_events = [e for e in self.events if not e.is_backspace]
-        for i in range(1, len(typing_events)):
-            prev = typing_events[i - 1]
-            curr = typing_events[i]
+        for prev, curr in zip(self.events, self.events[1:]):
+            if prev.is_backspace or curr.is_backspace:
+                continue
             dt = curr.timestamp - prev.timestamp
 
             if dt < THINKING_PAUSE_THRESHOLD:
@@ -312,22 +319,25 @@ class TypingAnalyzer:
         current_burst = 0
         burst_intervals = []
 
-        for dt in self.intervals:
+        def finish_burst():
+            nonlocal current_burst
+            if current_burst >= 3:
+                self.burst_lengths.append(current_burst)
+                avg = statistics.mean(burst_intervals)
+                self.burst_speeds.append(1.0 / avg if avg > 0 else 0)
+            current_burst = 0
+            burst_intervals.clear()
+
+        for index, dt in enumerate(self.intervals):
+            if index in self._interval_run_starts:
+                finish_burst()
             if dt < burst_threshold:
                 current_burst += 1
                 burst_intervals.append(dt)
             else:
-                if current_burst >= 3:
-                    self.burst_lengths.append(current_burst)
-                    avg = statistics.mean(burst_intervals)
-                    self.burst_speeds.append(1.0 / avg if avg > 0 else 0)
-                current_burst = 0
-                burst_intervals = []
+                finish_burst()
 
-        if current_burst >= 3:
-            self.burst_lengths.append(current_burst)
-            avg = statistics.mean(burst_intervals)
-            self.burst_speeds.append(1.0 / avg if avg > 0 else 0)
+        finish_burst()
 
     def _compute_rolling_wpm(self) -> None:
         """Compute WPM in 10-second sliding windows."""
