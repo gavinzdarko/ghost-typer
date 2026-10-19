@@ -178,8 +178,11 @@ class Orchestrator:
 
     def disable(self, blocking: bool = True) -> None:
         """Disable clipboard monitoring (app OFF)."""
-        self.clipboard_monitor.enabled = False
+        # A paused table probe owns the clipboard transaction lock while it
+        # waits for its simulator. Stop that simulator before waiting to restore
+        # the clipboard, otherwise turning OFF can never reach cancellation.
         self.cancel(blocking=blocking)
+        self.clipboard_monitor.enabled = False
         logger.info("Ghost Typer disabled")
 
     @property
