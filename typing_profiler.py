@@ -175,6 +175,14 @@ class TypingAnalyzer:
             print("Not enough keystrokes to analyze.")
             sys.exit(1)
 
+        # Reanalysis must rebuild statistics from this recording, including
+        # when callers append new events between previews.
+        for values in (self.intervals, self._interval_run_starts,
+                       self.digraph_intervals, self.char_intervals,
+                       self.corrections, self.pauses, self.word_wpms,
+                       self.burst_lengths, self.burst_speeds, self.rolling_wpms):
+            values.clear()
+
         self._compute_intervals()
         self._detect_corrections()
         self._detect_pauses()
