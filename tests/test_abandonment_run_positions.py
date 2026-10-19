@@ -5,7 +5,8 @@ from src.typing_planner import TypingPlanner
 
 def planner():
     p = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0, punctuation_error_rate=0,
-        false_alarm_rate=0, rewrite_base_probability=0, rewrite_max_probability=0), ai_enabled=False)
+        false_alarm_rate=0, rewrite_base_probability=0, rewrite_max_probability=0,
+        pause_frequency=0), ai_enabled=False)
     p.profile.behaviors.abandonment.probability_per_word = 1
     return p
 
