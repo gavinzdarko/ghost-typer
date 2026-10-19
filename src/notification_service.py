@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 from typing import Optional
+from urllib.parse import urlsplit
 
 import requests
 
@@ -132,29 +133,40 @@ class NotificationService:
         def _do_send() -> None:
             try:
 
-                # Auto-detect service type from URL
-                if "ntfy" in url or url.startswith("https://ntfy."):
+                # Tokens, query parameters, and path names cannot identify
+                # the service: only the destination host determines payloads.
+                host = (urlsplit(url).hostname or "").lower()
+                if host == "ntfy.sh" or host.startswith("ntfy."):
                     # ntfy.sh style
-                    requests.post(
+                    response = requests.post(
                         url,
                         data=message,
                         headers={"Title": title, "Priority": "default"},
                         timeout=10,
+                        stream=True,
                     )
-                elif "pushover" in url:
+                elif host == "pushover.net" or host.endswith(".pushover.net"):
                     # Pushover style — expects token and user in the URL params or as a full endpoint
-                    requests.post(
+                    response = requests.post(
                         url,
                         json={"title": title, "message": message},
                         timeout=10,
+                        stream=True,
                     )
                 else:
                     # Generic webhook: POST JSON
-                    requests.post(
+                    response = requests.post(
                         url,
                         json={"title": title, "message": message, "app": APP_NAME},
                         timeout=10,
+                        stream=True,
                     )
+                try:
+                    response.raise_for_status()
+                finally:
+                    # A webhook acknowledgment needs no response body. Avoid
+                    # downloading arbitrary data and always release sockets.
+                    response.close()
                 logger.info("Webhook notification sent")
             except Exception as exc:
                 # Request exceptions can embed the full destination URL,
