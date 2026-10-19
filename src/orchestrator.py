@@ -176,12 +176,21 @@ class Orchestrator:
     def enable(self) -> None:
         """Enable clipboard monitoring (app ON)."""
         self.clipboard_monitor.enabled = True
+        with self._session_lock:
+            self._sessions_disabled = False
         logger.info("Ghost Typer enabled")
 
     def disable(self, blocking: bool = True) -> None:
         """Disable clipboard monitoring (app OFF)."""
-        self.clipboard_monitor.enabled = False
+        # A paused table probe owns the clipboard transaction lock while it
+        # waits for its simulator. Stop that simulator before waiting to restore
+        # the clipboard, otherwise turning OFF can never reach cancellation.
+        with self._session_lock:
+            # A clipboard callback may already own its transaction lock. Fence
+            # its later launch before cancellation can observe an idle session.
+            self._sessions_disabled = True
         self.cancel(blocking=blocking)
+        self.clipboard_monitor.enabled = False
         logger.info("Ghost Typer disabled")
 
     @property
@@ -334,6 +343,9 @@ class Orchestrator:
                           of each new row (e.g. 1 if column A has labels).
         """
         with self._session_lock:
+            if getattr(self, "_sessions_disabled", False):
+                logger.info("Ignoring launch while Ghost Typer is disabled")
+                return False
             worker = self._typing_thread
             if self.state != OrchestratorState.IDLE or (worker and worker.is_alive()):
                 logger.info("Can't run table fill while a session is active")
@@ -581,6 +593,9 @@ class Orchestrator:
     def _launch_pipeline(self, target, args: tuple, name: str) -> bool:
         """Reserve a session atomically; a live previous worker retains ownership."""
         with self._session_lock:
+            if getattr(self, "_sessions_disabled", False):
+                logger.info("Ignoring launch while Ghost Typer is disabled")
+                return False
             worker = self._typing_thread
             if (worker and worker.is_alive()) or self.state != OrchestratorState.IDLE:
                 logger.info("Ignoring launch while a previous session is active")
