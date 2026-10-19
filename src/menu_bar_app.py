@@ -110,7 +110,6 @@ class GhostTyperApp(rumps.App):
             on_toggle_enabled=self._hotkey_toggle_enabled,
             on_paste=self._hotkey_paste,
         )
-        self._hotkey_listener.start()
 
         # Load current settings
         self._settings_dict = load_settings_dict()
@@ -169,6 +168,10 @@ class GhostTyperApp(rumps.App):
         self._gui_queue: queue.Queue = queue.Queue()
         self._gui_timer = rumps.Timer(self._process_gui_queue, 0.1)
         self._gui_timer.start()
+
+        # Callbacks may fire immediately when the global listener starts.
+        # Publish it only after every callback dependency and GUI queue exists.
+        self._hotkey_listener.start()
 
     def _wire_menu_delegate(self) -> None:
         """Attach the NSMenuDelegate to the status bar menu."""
