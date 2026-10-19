@@ -239,17 +239,40 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
         actions: list[TypingAction] = []
         total_chars = 0
 
-        # Build a map of formatting from original segments
-        seg_formats = {seg.text.strip(): seg.formatting for seg in original_segments}
-
+        # Resolve styles by source position. Identical words can occur with
+        # different formatting, so text-keyed/fuzzy lookups lose information.
+        source = "".join(segment.text for segment in original_segments)
+        style_ranges = []
+        position = 0
+        for segment in original_segments:
+            end = position + len(segment.text)
+            if segment.text:
+                style_ranges.append((position, end, segment.formatting))
+            position = end
+        position = 0
+        style_index = 0
         ai_segments = plan_data.get("segments", [])
 
         for ai_seg in ai_segments:
             seg_text = ai_seg.get("text", "")
             seg_actions = ai_seg.get("actions", [])
 
-            # Try to find matching formatting from original segments
-            formatting = self._find_formatting(seg_text, seg_formats)
+            end = position + len(seg_text)
+            if source[position:end] != seg_text or end > len(source):
+                raise ValueError("AI segment text differs from its source position")
+            while style_index < len(style_ranges) and style_ranges[style_index][1] <= position:
+                style_index += 1
+            formatting = style_ranges[style_index][2] if style_index < len(style_ranges) else {}
+            overlapping = style_index
+            while overlapping < len(style_ranges) and style_ranges[overlapping][0] < end:
+                if style_ranges[overlapping][2] != formatting:
+                    raise ValueError("AI segment crosses a formatting boundary")
+                overlapping += 1
+            # Paragraph styles cannot be safely reset using toggle shortcuts.
+            if any(formatting.get(key) for key in ("heading_level", "list_type", "alignment")):
+                raise ValueError("Paragraph formatting requires the source-aware fallback planner")
+            position = end
+            segment_start = len(actions)
 
             # Apply formatting if needed
             if formatting:
@@ -262,6 +285,9 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
                 new_actions, chars = self._convert_action(act)
                 actions.extend(new_actions)
                 total_chars += chars
+
+            if self._render_actions(actions[segment_start:]) != seg_text:
+                raise ValueError("AI segment actions differ from the declared text")
 
             # Untoggle formatting
             if formatting:
@@ -397,19 +423,6 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
 
         replay(actions)
         return "".join(output)
-
-    def _find_formatting(self, text: str, seg_formats: dict) -> dict:
-        """Find the best matching formatting for a text segment."""
-        text_stripped = text.strip()
-        if text_stripped in seg_formats:
-            return seg_formats[text_stripped]
-
-        # Fuzzy match — find the segment whose text is contained in or contains this text
-        for seg_text, fmt in seg_formats.items():
-            if seg_text in text_stripped or text_stripped in seg_text:
-                return fmt
-
-        return {}
 
     def _build_formatting_actions(self, fmt: dict) -> list[TypingAction]:
         """Build formatting shortcut actions from a formatting dict."""
