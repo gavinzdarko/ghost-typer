@@ -343,11 +343,16 @@ class GhostTyperApp(rumps.App):
 
     def _process_gui_queue(self, _timer) -> None:
         """Drain the GUI queue on the main thread (called by rumps.Timer)."""
-        if self._shutting_down:
-            return
-        while not self._gui_queue.empty():
+        # Producers may enqueue while this timer runs. Bound each turn so the
+        # AppKit loop can service menus, redraws and the emergency-stop controls.
+        for _ in range(100):
+            if self._shutting_down:
+                return
             try:
                 fn = self._gui_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
                 fn()
             except Exception:
                 logger.exception("Error in GUI queue callback")
