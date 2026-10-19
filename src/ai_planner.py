@@ -176,7 +176,7 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
         logger.info("Requesting AI typing plan for %d words...", word_count)
 
         response = self._client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=min(self.MAX_OUTPUT_TOKENS, max(512, len(full_text) * 3)),
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
