@@ -70,7 +70,8 @@ class _MenuDelegate(AppKit.NSObject):
         if app and not app._shutting_down:
             if getattr(app, '_menu_auto_paused', False):
                 app._menu_auto_paused = False
-                if app.orchestrator.state == OrchestratorState.PAUSED:
+                if (app.orchestrator.state == OrchestratorState.PAUSED
+                        and not getattr(app, '_settings_modal_active', False)):
                     app.orchestrator.resume()
                     logger.info("Auto-resumed typing (menu closed)")
 
@@ -244,7 +245,7 @@ class GhostTyperApp(rumps.App):
         # won this lock may already have launched planning and must be noticed.
         self._settings_modal_active = True
         try:
-            with self.orchestrator.clipboard_monitor.suspended():
+            with self.orchestrator.clipboard_monitor.suspended(blocking=False):
                 state = self.orchestrator.state
                 if state in (OrchestratorState.PLANNING, OrchestratorState.VERIFYING):
                     self.orchestrator.notification_service.notify_error(
@@ -252,6 +253,11 @@ class GhostTyperApp(rumps.App):
                     )
                     return None
                 simulator = self.orchestrator._simulator
+                if state == OrchestratorState.TYPING and simulator is None:
+                    self.orchestrator.notification_service.notify_error(
+                        "Wait for the typing session to become ready before opening settings."
+                    )
+                    return None
                 resume_after = state == OrchestratorState.TYPING and simulator is not None
                 if resume_after:
                     self.orchestrator.pause()
@@ -262,6 +268,11 @@ class GhostTyperApp(rumps.App):
                             and self.orchestrator.state == OrchestratorState.PAUSED):
                         self.orchestrator.resume()
 
+        except BlockingIOError:
+            self.orchestrator.notification_service.notify_error(
+                "Clipboard is busy; finish or stop the current operation before opening settings."
+            )
+            return None
         finally:
             self._settings_modal_active = False
 
@@ -312,6 +323,8 @@ class GhostTyperApp(rumps.App):
 
     def _pause_resume(self, sender: rumps.MenuItem) -> None:
         """Pause or resume current typing."""
+        if getattr(self, '_settings_modal_active', False):
+            return
         state = self.orchestrator.state
         if state == OrchestratorState.TYPING:
             self.orchestrator.pause()
