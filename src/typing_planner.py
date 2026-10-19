@@ -778,6 +778,11 @@ class TypingPlanner:
                              and self._abandon_count < abandonment_cfg.max_per_session else set())
         abandonment_positions = {match.start() for match in re.finditer(r"\b\w+\b", text)
                                  if match.group().lower() in abandonment_words}
+        # Normal runs can span an entire sentence. Select space boundaries
+        # explicitly so pauses do not depend on a typo splitting that run.
+        thinking_pause_positions = {pos for pos, char in enumerate(text)
+                                    if pos > 0 and char == " "
+                                    and self.engine.should_thinking_pause()}
 
         i = 0
         while i < len(text):
@@ -843,8 +848,9 @@ class TypingPlanner:
                 continue
 
             # Random thinking pause mid-chunk
-            if self.engine.should_thinking_pause() and i > 0 and text[i] == " ":
+            if i in thinking_pause_positions:
                 actions.append(Pause(duration=self.engine.thinking_pause_duration()))
+                thinking_pause_positions.discard(i)
 
             # Normal typing — accumulate a run of non-mistake characters
             run_start = i
@@ -854,6 +860,7 @@ class TypingPlanner:
                 and i not in rewrite_positions
                 and i not in word_misspells
                 and i not in abandonment_positions
+                and i not in thinking_pause_positions
             ):
                 i += 1
             run_text = text[run_start:i]
