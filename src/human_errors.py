@@ -383,19 +383,15 @@ class HumanErrors:
             except json.JSONDecodeError:
                 pass
 
-        # Try to find JSON object
-        brace_start = text.find("{")
-        if brace_start >= 0:
-            depth = 0
-            for i in range(brace_start, len(text)):
-                if text[i] == "{":
-                    depth += 1
-                elif text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            return json.loads(text[brace_start:i + 1])
-                        except json.JSONDecodeError:
-                            break
+        # Decode the object rather than counting braces: clipboard prose can
+        # contain quoted braces, escaped quotes, and JSON-looking text.
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", text):
+            try:
+                data, _ = decoder.raw_decode(text, match.start())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                return data
 
         return None
