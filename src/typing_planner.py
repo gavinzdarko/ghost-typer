@@ -379,7 +379,8 @@ class TypingPlanner:
         applied_actions = 0
 
         segment_offset = 0
-        for chunk in chunks:
+        for chunk_idx, chunk in enumerate(chunks):
+            is_separator = bool(chunk.text and not chunk.text.strip() and "\n" in chunk.text)
             chunk_misspellings = {pos - segment_offset: pair
                                   for pos, pair in misspell_by_position.items()
                                   if segment_offset <= pos < segment_offset + len(chunk.text)}
@@ -388,7 +389,7 @@ class TypingPlanner:
             if chunk.is_thought_boundary:
                 sentences_since_thought_pause = 0
                 next_thought_pause_at = self._rng.randint(self.profile.pauses.thought_pause_sentences_interval.min, self.profile.pauses.thought_pause_sentences_interval.max)
-            elif chunk.is_sentence_end or chunk.is_paragraph_end:
+            elif not is_separator and (chunk.is_sentence_end or chunk.is_paragraph_end):
                 sentences_since_thought_pause += 1
                 if sentences_since_thought_pause >= next_thought_pause_at:
                     duration = self._r(self.profile.pauses.thought_pause_duration)
@@ -425,7 +426,10 @@ class TypingPlanner:
             if not restructured:
                 self._chunk_prefix = emitted.text
                 chunk_actions, chunk_chars, chunk_typos = self._plan_chunk(
-                    chunk, misspell_by_position=chunk_misspellings, total_paste_chars=total_paste_chars
+                    chunk, misspell_by_position=chunk_misspellings, total_paste_chars=total_paste_chars,
+                    defer_paragraph_pause=(chunk_idx + 1 < len(chunks)
+                        and not chunks[chunk_idx + 1].text.strip()
+                        and "\n" in chunks[chunk_idx + 1].text),
                 )
                 actions.extend(chunk_actions)
                 char_count += chunk_chars
@@ -727,6 +731,7 @@ class TypingPlanner:
     def _plan_chunk(
         self, chunk: _Chunk, misspell_by_position: dict[int, tuple[str, str]] | None = None,
         total_paste_chars: int = 500,
+        defer_paragraph_pause: bool = False,
     ) -> tuple[list[TypingAction], int, list[tuple[str, str, int]]]:
         """Plan actions for a single chunk of text.
 
@@ -891,7 +896,7 @@ class TypingPlanner:
         # --- Post-chunk pauses ---
         if chunk.is_sentence_end:
             actions.append(Pause(duration=self.engine.sentence_pause_duration()))
-        if chunk.is_paragraph_end:
+        if chunk.is_paragraph_end and not defer_paragraph_pause:
             actions.append(Pause(duration=self.engine.paragraph_pause_duration()))
 
         return actions, char_count, uncorrected_typos
