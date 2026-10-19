@@ -1698,7 +1698,7 @@ class TypingPlanner:
         for ann in annotations:
             start = ann.get("start", -1)
             end = ann.get("end", -1)
-            if start <= char_position <= end:
+            if start <= char_position < end:
                 mode = ann.get("mode", "copy")
                 if mode == "composition":
                     return cfg.composition_speed_multiplier
@@ -1723,7 +1723,7 @@ class TypingPlanner:
         for ann in annotations:
             start = ann.get("start", -1)
             end = ann.get("end", -1)
-            if start <= char_position <= end and ann.get("mode") == "composition":
+            if start <= char_position < end and ann.get("mode") == "composition":
                 in_composition = True
                 break
 
@@ -1929,7 +1929,7 @@ class TypingPlanner:
         for qr in quote_ranges:
             start = qr.get("start", -1)
             end = qr.get("end", -1)
-            if start <= char_position <= end:
+            if start <= char_position < end:
                 qtype = qr.get("type", "direct_quote")
                 if qtype == "paraphrase_close":
                     return cfg.paraphrase_speed_multiplier
