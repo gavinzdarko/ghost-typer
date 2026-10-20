@@ -56,9 +56,12 @@ class ProgressOverlay:
         screen = AppKit.NSScreen.mainScreen()
         if not screen:
             return False
-        frame = screen.frame()
-        top_y = frame.size.height - 24 - _HEIGHT - 8
-        x = (frame.size.width - _WIDTH) / 2
+        # NSScreen coordinates are global; secondary displays can have a
+        # nonzero or negative origin. visibleFrame also accounts for the menu
+        # bar, Dock and display cutouts without a fixed menu-bar height.
+        frame = screen.visibleFrame()
+        top_y = frame.origin.y + frame.size.height - _HEIGHT - 8
+        x = frame.origin.x + (frame.size.width - _WIDTH) / 2
 
         rect = AppKit.NSMakeRect(x, top_y, _WIDTH, _HEIGHT)
         window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
