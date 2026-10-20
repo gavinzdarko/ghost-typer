@@ -63,6 +63,10 @@ The ghost icon appears in your menu bar. Click it and select **Turn ON**.
 3. Click where you want to type
 4. Press **Cmd+V** — Ghost Typer intercepts the paste and types it out naturally
 
+During table fill, avoid copying from other apps. Cell checks temporarily use
+the system clipboard. Revision checks protect copies observed during setup,
+but competing writes can still race with a clipboard write or restoration.
+
 ### Build as App (optional)
 
 To create a standalone `Ghost Typer.app`:

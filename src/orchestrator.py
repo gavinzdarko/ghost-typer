@@ -369,8 +369,9 @@ class Orchestrator:
     def _cell_has_content(self, simulator: KeystrokeSimulator) -> bool:
         """Probe a cell while preserving every pasteboard representation.
 
-        Restoration is conditional on the revision still belonging to this probe;
-        a later clipboard writer takes ownership and must never be overwritten.
+        Restoration is conditional on the observed revision still belonging to
+        this probe. NSPasteboard has no compare-and-swap write: revision checks
+        reduce competing-writer races but cannot make this transaction atomic.
         """
         import AppKit
         pb = AppKit.NSPasteboard.generalPasteboard()
