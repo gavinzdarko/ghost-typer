@@ -554,6 +554,11 @@ class TypingEngine:
             self.state.current_word = (self.state.current_word + char)[-256:]
         self.update_fatigue()
 
+    @property
+    def previous_visible_char(self) -> str:
+        """Return the known character immediately before the insertion point."""
+        return self._visible_context[-1] if self._visible_context else ""
+
     def on_backspace(self) -> None:
         """Update visible word context without undoing physical typing statistics."""
         if self._visible_context:

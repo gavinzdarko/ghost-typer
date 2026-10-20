@@ -50,3 +50,29 @@ def test_long_unbroken_text_has_bounded_runtime_word_context():
     engine.reset()
     assert engine.state.current_word == ''
     assert not engine._visible_context
+
+
+def test_rewrite_replacement_timing_uses_surviving_visible_character():
+    app, engine, sim = runtime()
+    app._execute_type_text(TypeText(text='old word'), engine, sim, '')
+    engine.delay_for_keystroke = Mock(return_value=0)
+    app._execute_rewrite(Rewrite.simple(5, 'er'), engine, sim)
+    assert engine.delay_for_keystroke.call_args_list[0].args == ('e', 'd')
+
+
+def test_abandonment_replacement_timing_forgets_deleted_partial_character():
+    app, engine, sim = runtime()
+    app._execute_type_text(TypeText(text='t'), engine, sim, '')
+    engine.delay_for_keystroke = Mock(return_value=0)
+    app._execute_abandon_word(AbandonWord(partial_text='xy', replacement_text='he'), engine, sim, 't')
+    assert [call.args for call in engine.delay_for_keystroke.call_args_list] == [
+        ('x', 't'), ('y', 'x'), ('h', 't'), ('e', 'h')]
+
+
+def test_backspace_returns_surviving_character_for_next_action_timing():
+    app, engine, sim = runtime()
+    app._execute_type_text(TypeText(text='thx'), engine, sim, '')
+    previous = app._execute_press_key(PressKey(key='backspace'), engine, sim, 'x')
+    engine.delay_for_keystroke = Mock(return_value=0)
+    app._execute_type_text(TypeText(text='e'), engine, sim, previous)
+    engine.delay_for_keystroke.assert_called_once_with('e', 'h')
