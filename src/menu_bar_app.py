@@ -63,7 +63,9 @@ class _MenuDelegate(AppKit.NSObject):
         app = self._app_ref
         if app and not app._shutting_down:
             app.orchestrator.set_menu_open(True)
-            if app.orchestrator.state in (OrchestratorState.TYPING, OrchestratorState.PLANNING):
+            # A new paste can become ready even if the menu opened while idle.
+            # Preserve only pauses that already belonged to the user.
+            if app.orchestrator.state != OrchestratorState.PAUSED:
                 app._menu_auto_paused = True
                 app.orchestrator.pause()
                 logger.info("Auto-paused typing (menu opened)")

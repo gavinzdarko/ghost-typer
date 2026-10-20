@@ -56,3 +56,29 @@ def test_menu_closed_before_planning_finishes_does_not_pause_future_typing():
         app.orchestrator._activate_simulator()
     assert app.orchestrator.state == OrchestratorState.TYPING
     sim.pause.assert_not_called()
+
+
+def test_menu_opened_while_idle_resumes_a_newly_ready_session():
+    app = target()
+    app.orchestrator._state = OrchestratorState.IDLE
+    delegate = SimpleNamespace(_app_ref=app)
+    delegate_method('menuWillOpen_')(delegate, None)
+    app.orchestrator.state = OrchestratorState.PLANNING
+    sim = Mock()
+    with patch('src.orchestrator.KeystrokeSimulator', return_value=sim):
+        app.orchestrator._activate_simulator()
+    assert app.orchestrator.state == OrchestratorState.PAUSED
+    delegate_method('menuDidClose_')(delegate, None)
+    assert app.orchestrator.state == OrchestratorState.TYPING
+    sim.resume.assert_called_once()
+
+
+def test_preexisting_manual_pause_is_not_resumed_when_menu_closes():
+    app = target()
+    app.orchestrator._state = OrchestratorState.PAUSED
+    app.orchestrator._simulator = Mock()
+    delegate = SimpleNamespace(_app_ref=app)
+    delegate_method('menuWillOpen_')(delegate, None)
+    delegate_method('menuDidClose_')(delegate, None)
+    assert app.orchestrator.state == OrchestratorState.PAUSED
+    app.orchestrator._simulator.resume.assert_not_called()
