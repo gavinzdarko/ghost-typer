@@ -11,13 +11,25 @@ from .models import AbandonWord, ApplyFormatting, MakeMistake, PressKey, Rewrite
 
 class PlannedText:
     def __init__(self, text="", *, track_typos=False, max_typo_distance=None):
-        self.text = text
+        self._text = text
+        self._appends = []
+        self._length = len(text)
         self.cursor = len(text)
         self.anchor = None
         self.valid = True
         self.typos = []
         self.track_typos = track_typos
         self.max_typo_distance = max_typo_distance
+
+    @property
+    def text(self):
+        if self._appends:
+            self._text = "".join([self._text, *self._appends])
+            self._appends.clear()
+        return self._text
+
+    def __len__(self):
+        return self._length
 
     def _insert(self, text):
         start, end = sorted((self.cursor, self.anchor if self.anchor is not None else self.cursor))
@@ -28,11 +40,19 @@ class PlannedText:
         self.typos = [(wrong, correct, pos if pos + len(wrong) <= start else pos + delta)
                       for wrong, correct, pos in self.typos
                       if pos + len(wrong) <= start or pos >= end]
-        self.text = self.text[:start] + text + self.text[end:]
+        if start == end == self._length:
+            # Most replay events append to the insertion endpoint. Buffer them
+            # instead of copying every earlier character for each keystroke.
+            if text:
+                self._appends.append(text)
+        else:
+            current = self.text
+            self._text = current[:start] + text + current[end:]
+        self._length += delta
         self.cursor = start + len(text)
         self.anchor = None
         if self.max_typo_distance is not None:
-            self.typos = [entry for entry in self.typos if len(self.text) - entry[2] <= self.max_typo_distance]
+            self.typos = [entry for entry in self.typos if self._length - entry[2] <= self.max_typo_distance]
 
     def apply(self, actions):
         if not self.valid:
@@ -61,7 +81,7 @@ class PlannedText:
             elif isinstance(action, PressKey):
                 if action.key in ("left", "right"):
                     self.cursor += -1 if action.key == "left" else 1
-                    if not 0 <= self.cursor <= len(self.text):
+                    if not 0 <= self.cursor <= self._length:
                         self.valid = False
                         return self
                     self.anchor = None
@@ -83,7 +103,7 @@ class PlannedText:
                     if self.anchor is None:
                         self.anchor = self.cursor
                     self.cursor += 1
-                    if self.cursor > len(self.text):
+                    if self.cursor > self._length:
                         self.valid = False
                         return self
                 else:

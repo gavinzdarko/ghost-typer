@@ -425,7 +425,11 @@ class TypingPlanner:
                     restructured = True
 
             if not restructured:
-                self._chunk_prefix = emitted.text
+                # Full emitted text is only needed by verified autocorrect
+                # navigation. Reading it for every ordinary chunk defeats the
+                # replay buffer by repeatedly materializing the growing prefix.
+                if self._behavioral_content.get("autocorrect_fixes"):
+                    self._chunk_prefix = emitted.text
                 chunk_actions, chunk_chars, chunk_typos = self._plan_chunk(
                     chunk, misspell_by_position=chunk_misspellings, total_paste_chars=total_paste_chars,
                     defer_paragraph_pause=(chunk_idx + 1 < len(chunks)
@@ -445,7 +449,7 @@ class TypingPlanner:
             if (chunk.is_sentence_end or chunk.is_paragraph_end) and emitted.typos:
                 if self._rng.random() < self.settings.proofread_probability:
                     proof_actions = self._build_proofread(
-                        emitted.typos, len(emitted.text),
+                        emitted.typos, len(emitted),
                         known_text=emitted.text if emitted.valid else "",
                     )
                     actions.extend(proof_actions)
