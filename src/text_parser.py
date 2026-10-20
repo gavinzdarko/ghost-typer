@@ -65,7 +65,7 @@ class TextParser:
         return segments
 
     # Tags whose content should be removed entirely
-    STRIP_TAGS = {"script", "style", "noscript", "svg", "math", "head", "title", "meta", "link", "base"}
+    STRIP_TAGS = {"script", "style", "noscript", "svg", "math", "head", "title", "meta", "link", "base", "template"}
 
     # Regex for citation-like <sup> content: [1], [a], [1][2], [edit], etc.
     _SUP_CITATION_RE = re.compile(r"^\s*\[[\d\w,\s]+\]\s*$")
@@ -101,6 +101,7 @@ class TextParser:
                     or self._SUP_CITATION_RE.match(text_content)):
                 sup.replace_with("")
 
+        self._strip_invisible_text(soup)
         body = soup.body if soup.body else soup
         segments: list[TextSegment] = []
         self._walk_node(body, {}, segments, list_context=None, list_counter=None)
@@ -113,6 +114,39 @@ class TextParser:
                                        "explicit_break_count")}
 
         return self._clean_segments(segments)
+
+    @staticmethod
+    def _strip_invisible_text(root: Tag) -> None:
+        """Remove invisible text while allowing descendants to restore visibility.
+
+        Unlike display:none, visibility:hidden is inherited and a child can
+        override it. Clean before PRE's get_text() shortcut reads descendants.
+        """
+        stack = [(root, False)]
+        while stack:
+            node, inherited_hidden = stack.pop()
+            if isinstance(node, NavigableString):
+                if inherited_hidden:
+                    node.extract()
+                continue
+            if not isinstance(node, Tag):
+                continue
+            hidden = inherited_hidden
+            declarations = re.findall(r"(?:^|;)\s*visibility\s*:\s*([^;]+)",
+                                      node.get("style", ""), re.IGNORECASE)
+            important = [value for value in declarations
+                         if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+            if declarations:
+                value = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
+                               flags=re.IGNORECASE).strip().lower()
+                if value in ("hidden", "collapse"):
+                    hidden = True
+                elif value in ("visible", "initial"):
+                    hidden = False
+            # Keep visibility for parser-generated markers as well as literal
+            # text. A visible descendant does not restore its parent's marker.
+            node._ghost_visibility_hidden = hidden
+            stack.extend((child, hidden) for child in node.children)
 
     @staticmethod
     def _is_hidden(node: Tag) -> bool:
@@ -153,6 +187,7 @@ class TextParser:
 
         tag = node.name.lower() if node.name else ""
         fmt = dict(inherited_fmt)
+        visibility_hidden = bool(getattr(node, "_ghost_visibility_hidden", False))
 
         # Compute formatting from tag
         if tag in ("b", "strong"):
@@ -204,7 +239,10 @@ class TextParser:
 
         # Horizontal rule
         if tag == "hr":
-            segments.append(TextSegment(text="\n---\n", formatting={"horizontal_rule": True}))
+            if visibility_hidden:
+                segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+            else:
+                segments.append(TextSegment(text="\n---\n", formatting={"horizontal_rule": True}))
             return
 
         # Lists
@@ -243,7 +281,8 @@ class TextParser:
                 prefix = "- "
                 fmt["list_type"] = "bulleted"
 
-            segments.append(TextSegment(text=prefix, formatting=dict(fmt, list_prefix=True)))
+            if not visibility_hidden:
+                segments.append(TextSegment(text=prefix, formatting=dict(fmt, list_prefix=True)))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
             segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
