@@ -417,7 +417,9 @@ class TypingAnalyzer:
         error_rate = len(self.corrections) / max(total_chars, 1)
 
         # --- Correction delay (chars typed before noticing) ---
-        correction_delays = [c.chars_deleted for c in self.corrections]
+        # One deletion removes the erroneous character itself. Only the
+        # remaining deleted characters approximate typing after the error.
+        correction_delays = [max(0, c.chars_deleted - 1) for c in self.corrections]
         correction_delay_min = min(correction_delays) if correction_delays else 0
         correction_delay_max = max(correction_delays) if correction_delays else 3
         correction_delay_median = (
@@ -632,7 +634,7 @@ def print_profile(profile: dict) -> None:
     print(f"\n  ERRORS")
     print(f"    Error rate:        {analysis['error_rate_pct']:.1f}%")
     print(f"    Corrections:       {analysis['total_corrections']}")
-    print(f"    Avg chars deleted:  {analysis['correction_delay_median']:.0f}")
+    print(f"    Chars before notice: {analysis['correction_delay_median']:.0f}")
     print(f"    Pause before fix:  {analysis['correction_pause_before_ms']:.0f}ms")
     print(f"    Backspace speed:   {analysis['avg_backspace_interval_ms']:.0f}ms/key")
 
