@@ -170,7 +170,7 @@ Text to type:
 ---
 
 Generate the typing plan as JSON. Make it feel like a real person typing this for the first time. \
-Include {max(1, int(word_count * self.settings.error_rate))} typos and \
+Include {(max(1, int(word_count * self.settings.error_rate)) if self.settings.error_rate > 0 else 0)} typos and \
 {max(0, int(word_count * self.settings.rewrite_max_probability))} rewrites spread naturally throughout."""
 
         logger.info("Requesting AI typing plan for %d words...", word_count)
@@ -358,6 +358,8 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
             wrong = act.get("wrong", "")
             correct = act.get("correct", "")
             notice_after = int(act.get("chars_before_noticing", 0))
+            if correct and self.settings.error_rate <= 0:
+                return self._convert_action({"type": "type", "text": correct})
             if wrong and correct:
                 self._validate_edit_text(wrong, correct)
                 actions.append(MakeMistake(
@@ -370,6 +372,8 @@ Include {max(1, int(word_count * self.settings.error_rate))} typos and \
         elif act_type == "rewrite":
             first_attempt = act.get("first_attempt", "")
             final_version = act.get("final_version", "")
+            if final_version and self.settings.rewrite_max_probability <= 0:
+                return self._convert_action({"type": "type", "text": final_version})
             if first_attempt and final_version:
                 self._validate_edit_text(first_attempt, final_version)
                 # Type the first attempt
