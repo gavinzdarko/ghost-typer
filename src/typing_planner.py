@@ -74,6 +74,17 @@ FORMAT_TYPE_MAP: dict[str, FormatType] = {
 # Regex to split text into sentences (keep the trailing space with the preceding sentence)
 SENTENCE_RE = re.compile(r"(?<=[.!?]\s)(?=\S)")
 
+def _split_after_separators(text: str, punctuation: str) -> list[str]:
+    """Keep complete whitespace runs with their preceding sentence or phrase."""
+    result = []
+    start = 0
+    for match in re.finditer(r"[" + re.escape(punctuation) + r"][^\S\n]+(?=\S)", text):
+        result.append(text[start:match.end()])
+        start = match.end()
+    result.append(text[start:])
+    return result
+
+
 # Regex to split into phrases (keep delimiter and trailing space with the preceding phrase)
 PHRASE_RE = re.compile(r"(?<=[,;:\u2014\u2013]\s)(?=\S)")
 
@@ -686,7 +697,7 @@ class TypingPlanner:
                 continue
 
             # Split paragraph into sentences
-            sentences = SENTENCE_RE.split(para)
+            sentences = _split_after_separators(para, ".!?")
 
             for s_idx, sentence in enumerate(sentences):
                 if not sentence:
@@ -718,7 +729,7 @@ class TypingPlanner:
 
     def _split_into_phrases(self, sentence: str) -> list[str]:
         """Split a sentence at phrase boundaries (commas, semicolons, etc.)."""
-        parts = PHRASE_RE.split(sentence)
+        parts = _split_after_separators(sentence, ",;:\u2014\u2013")
         result: list[str] = []
         for part in parts:
             if part.strip():
@@ -1203,8 +1214,8 @@ class TypingPlanner:
 
         # Find sentence start positions for granularity validation
         sentence_starts: set[int] = set()
-        for m in re.finditer(r"(?<=[.!?]\s)\S", text):
-            sentence_starts.add(m.start())
+        for m in re.finditer(r"[.!?][^\S\n]+(?=\S)", text):
+            sentence_starts.add(m.end())
         # Also include position 0 and positions after newlines
         sentence_starts.add(0)
         for m in re.finditer(r"\n\s*\S", text):
