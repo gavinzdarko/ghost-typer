@@ -1122,7 +1122,7 @@ class TypingPlanner:
             if typo_char and len(typo_char) == 1 and typo_char == intended_char.swapcase():
                 typo_char = intended_char
 
-        if typo_char == intended_char or not typo_char:
+        if typo_char == intended_char:
             # Couldn't generate a good typo — just type normally
             actions.append(TypeText(text=intended_char))
             return actions, 1, None
@@ -1130,8 +1130,10 @@ class TypingPlanner:
         # Double-strike: typo_char is two copies of intended_char (e.g. "hh")
         is_double = len(typo_char) == 2 and typo_char == intended_char + intended_char
 
-        # ~8% of typos go unnoticed
-        if self._rng.random() < self.profile.mistakes.unnoticed_rate:
+        # Omitted letters are always restored: an empty wrong-text marker
+        # cannot safely anchor a later proofreading fix. Other typos retain
+        # their existing unnoticed-error behavior.
+        if typo_char and self._rng.random() < self.profile.mistakes.unnoticed_rate:
             actions.append(TypeText(text=typo_char))
             # For double-strike left uncorrected, the first char IS correct
             if is_double:
