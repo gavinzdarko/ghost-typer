@@ -242,7 +242,8 @@ class TypingEngine:
             base *= p.keystroke.finger_middle_multiplier
         elif finger == 3:
             base *= p.keystroke.finger_index_multiplier
-        # thumb (4) uses thumb_multiplier but it's 1.0 by default
+        elif finger == 4:
+            base *= p.keystroke.finger_thumb_multiplier
 
         # --- Feature 6: Hand alternation ---
         if prev_char:
