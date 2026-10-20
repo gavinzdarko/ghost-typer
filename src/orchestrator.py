@@ -375,6 +375,7 @@ class Orchestrator:
         import AppKit
         pb = AppKit.NSPasteboard.generalPasteboard()
         with self.clipboard_monitor.suspended():
+            snapshot_revision = pb.changeCount()
             saved_items = []
             for item in pb.pasteboardItems() or []:
                 saved = AppKit.NSPasteboardItem.alloc().init()
@@ -384,13 +385,21 @@ class Orchestrator:
                         raise RuntimeError("Could not preserve the clipboard for a cell check")
                 saved_items.append(saved)
 
+            if pb.changeCount() != snapshot_revision:
+                raise RuntimeError("Clipboard changed during a cell check; retry table fill")
             owned_revision = None
             try:
-                pb.clearContents()
-                owned_revision = pb.changeCount()
+                cleared_revision = pb.clearContents()
+                owned_revision = int(cleared_revision) if cleared_revision is not None else pb.changeCount()
+                if pb.changeCount() != owned_revision:
+                    raise RuntimeError("Clipboard changed during a cell check; retry table fill")
                 if not pb.setString_forType_(self._CLIPBOARD_SENTINEL, AppKit.NSPasteboardTypeString):
                     raise RuntimeError("Could not prepare clipboard for a cell check")
-                owned_revision = pb.changeCount()
+                prepared_revision = pb.changeCount()
+                if (pb.stringForType_(AppKit.NSPasteboardTypeString) != self._CLIPBOARD_SENTINEL
+                        or pb.changeCount() != prepared_revision):
+                    raise RuntimeError("Clipboard changed during a cell check; retry table fill")
+                owned_revision = prepared_revision
                 simulator.wait(0.05)
                 simulator.hotkey("command", "left")
                 simulator.wait(0.1)

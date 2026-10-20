@@ -110,3 +110,36 @@ def test_suspension_does_not_consume_staged_paste_or_change_enabled():
         assert monitor._staged_content.text == 'staged'
     monitor.trigger_paste()
     monitor._on_change.assert_called_once()
+
+
+def test_new_copy_during_snapshot_is_preserved_without_sending_keys():
+    pb = Pasteboard()
+    original_items = pb.pasteboardItems
+    def copying_snapshot():
+        result = original_items()
+        pb.setString_forType_('new user copy', 'text')
+        return result
+    pb.pasteboardItems = copying_snapshot
+    sim = Mock()
+    app, context = probe(pb, sim)
+    with context, pytest.raises(RuntimeError, match='Clipboard changed'):
+        app._cell_has_content(sim)
+    assert pb.items[0].data == {'text': b'new user copy'}
+    sim.hotkey.assert_not_called()
+
+
+def test_clear_revision_does_not_claim_a_new_user_copy():
+    pb = Pasteboard()
+    original_clear = pb.clearContents
+    def concurrent_clear():
+        original_clear()
+        our_revision = pb.changeCount()
+        pb.setString_forType_('new user copy', 'text')
+        return our_revision
+    pb.clearContents = concurrent_clear
+    sim = Mock()
+    app, context = probe(pb, sim)
+    with context, pytest.raises(RuntimeError, match='Clipboard changed'):
+        app._cell_has_content(sim)
+    assert pb.items[0].data == {'text': b'new user copy'}
+    sim.hotkey.assert_not_called()
