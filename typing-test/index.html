@@ -368,7 +368,7 @@ function handleChar(key, now, iki) {
 
     // Digraph timing
     if (cursorPos > 0 && cursorPos <= promptChars.length) {
-      const prev = promptChars[cursorPos - 1];
+      const prev = typed[cursorPos - 1];
       if (prev && prev !== ' ' && key !== ' ') {
         const di = (prev + key).toLowerCase();
         if (/^[a-z]{2}$/.test(di)) {
