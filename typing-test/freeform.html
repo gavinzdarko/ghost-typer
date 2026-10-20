@@ -90,6 +90,11 @@ let startTime = 0, started = false, lastTime = 0, lastBsTime = 0;
 let charCount = 0, bsCount = 0;
 let finished = false, finishTime = null;
 
+// Match the engine and prompted profiler: one WPM unit is five characters.
+function standardWpm(text, seconds) {
+  return seconds > 0 ? Math.round((Array.from(text).length / 5 / seconds) * 60) : 0;
+}
+
 function elapsedSeconds() {
   return started ? ((finishTime ?? performance.now()) - startTime) / 1000 : 0;
 }
@@ -149,7 +154,7 @@ function updateLive() {
   const t = elapsedSeconds();
   const text = area.value;
   const words = text.trim().split(/\s+/).filter(Boolean).length;
-  const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
+  const wpm = standardWpm(area.value, t);
   const avgIki = ikis.length > 0 ? Math.round(ikis.reduce((a,b)=>a+b,0)/ikis.length) : 0;
   const avgBs = bsIkis.length > 0 ? Math.round(bsIkis.reduce((a,b)=>a+b,0)/bsIkis.length) : 0;
   document.getElementById('s-wpm').textContent = wpm;
@@ -180,7 +185,7 @@ function showResults() {
   updateLive();
   const t = elapsedSeconds();
   const words = area.value.trim().split(/\s+/).filter(Boolean).length;
-  const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
+  const wpm = standardWpm(area.value, t);
   const errRate = (charCount + bsCount) > 0 ? bsCount / (charCount + bsCount) : 0;
 
   ft('t-overview', [
@@ -244,7 +249,7 @@ function buildJSON() {
   flushBurst();
   const t = elapsedSeconds();
   const words = area.value.trim().split(/\s+/).filter(Boolean).length;
-  const wpm = t > 0 ? Math.round((words / t) * 60) : 0;
+  const wpm = standardWpm(area.value, t);
   const diAvg = {};
   for (const [d, ts] of Object.entries(digraphs)) { if (ts.length >= 2) diAvg[d] = Math.round(avg(ts)); }
   const diSorted = Object.entries(diAvg).sort((a,b)=>a[1]-b[1]);
