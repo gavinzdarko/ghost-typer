@@ -42,6 +42,7 @@ class VisualVerifier:
 
     def __init__(self, enabled: bool = True):
         self.enabled = bool(enabled)
+        self._capture_directories = {}
         if self.enabled:
             logger.info("Visual verifier initialized (OCR: %s, CV: %s)", HAS_TESSERACT, HAS_OPENCV)
         else:
@@ -56,11 +57,12 @@ class VisualVerifier:
         Returns:
             Path to the saved screenshot, or None on failure.
         """
-        path = None
+        capture_directory = None
         try:
-            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            tmp.close()
-            path = tmp.name
+            # macOS can write one image per display, including companion files
+            # not named in the command. Own the entire output directory.
+            capture_directory = tempfile.TemporaryDirectory(prefix="ghost-typer-capture-")
+            path = str(Path(capture_directory.name) / "screen.png")
 
             if region:
                 x, y, w, h = region
@@ -69,15 +71,14 @@ class VisualVerifier:
                 cmd = ["screencapture", "-x", path]
 
             subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+            screenshot = Path(path)
+            self._capture_directories[screenshot] = capture_directory
             logger.info("Screenshot saved to %s", path)
-            return Path(path)
+            return screenshot
         except Exception:
             logger.exception("Failed to capture screenshot")
-            if path:
-                try:
-                    Path(path).unlink(missing_ok=True)
-                except Exception:
-                    pass
+            if capture_directory is not None:
+                capture_directory.cleanup()
             return None
 
     def extract_text(self, image_path: Path) -> Optional[str]:
@@ -160,10 +161,14 @@ class VisualVerifier:
             except ValueError as exc:
                 return VerificationResult(success=False, match_ratio=0.0, message=str(exc))
         finally:
-            try:
-                screenshot.unlink()
-            except OSError:
-                pass
+            capture_directory = self._capture_directories.pop(screenshot, None)
+            if capture_directory is not None:
+                capture_directory.cleanup()
+            else:
+                try:
+                    screenshot.unlink()
+                except OSError:
+                    pass
 
         success = match_ratio > 0.85  # 85% match threshold
 
