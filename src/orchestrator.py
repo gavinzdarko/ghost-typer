@@ -198,10 +198,12 @@ class Orchestrator:
     def is_enabled(self) -> bool:
         return self.clipboard_monitor.enabled
 
-    def set_menu_open(self, value: bool) -> None:
-        """Fence new keyboard sessions while the menu owns keyboard focus."""
+    def set_menu_open(self, value: bool) -> bool:
+        """Fence keyboard sessions and atomically identify menu pause ownership."""
         with self._session_lock:
+            auto_pause = value and self.state != OrchestratorState.PAUSED
             self._menu_open = value
+            return auto_pause
 
     def _activate_simulator(self) -> KeystrokeSimulator:
         """Publish a ready simulator and honor a menu opened during planning."""

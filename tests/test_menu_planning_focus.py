@@ -82,3 +82,24 @@ def test_preexisting_manual_pause_is_not_resumed_when_menu_closes():
     delegate_method('menuDidClose_')(delegate, None)
     assert app.orchestrator.state == OrchestratorState.PAUSED
     app.orchestrator._simulator.resume.assert_not_called()
+
+
+def test_worker_activating_while_menu_open_callback_runs_keeps_menu_pause_ownership():
+    app = target()
+    delegate = SimpleNamespace(_app_ref=app)
+    original = app.orchestrator.set_menu_open
+    sim = Mock()
+
+    def activate_before_callback_continues(value):
+        result = original(value)
+        if value:
+            with patch('src.orchestrator.KeystrokeSimulator', return_value=sim):
+                app.orchestrator._activate_simulator()
+        return result
+
+    app.orchestrator.set_menu_open = activate_before_callback_continues
+    delegate_method('menuWillOpen_')(delegate, None)
+    assert app.orchestrator.state == OrchestratorState.PAUSED
+    delegate_method('menuDidClose_')(delegate, None)
+    assert app.orchestrator.state == OrchestratorState.TYPING
+    sim.resume.assert_called_once()
