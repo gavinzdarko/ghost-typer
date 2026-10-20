@@ -19,7 +19,8 @@ def app():
     queued = []
     target = SimpleNamespace(orchestrator=SimpleNamespace(state_snapshot=(OrchestratorState.TYPING, 1)),
         _status_item=SimpleNamespace(title="Status: Typing..."),
-        _progress_overlay=Mock(), _run_on_main=queued.append)
+        _progress_overlay=Mock(), _run_on_main=queued.append,
+        _queue_gui_update=lambda key, fn: queued.append(fn))
     return target, queued
 
 
