@@ -152,7 +152,17 @@ class KeystrokeSimulator:
         """Type a single character. Handles uppercase/shift automatically."""
         if not self._check_state():
             return
-        self._safe_cg_call(self._controller.type, char)
+        self._safe_cg_call(self._do_type_char, char)
+
+    def _do_type_char(self, char: str) -> None:
+        """Preserve pynput's control mapping while always releasing a pressed key.
+
+        Controller.type performs these same public press/release calls without
+        a finally block. A backend may fail after posting the key-down event.
+        Pass Unicode characters intact so pynput retains its native handling.
+        """
+        key = {"\n": Key.enter, "\r": Key.enter, "\t": Key.tab}.get(char, char)
+        self._do_press_release(key)
 
     def press_key(self, key_name: str) -> None:
         """Press and release a special key by name (e.g. 'enter', 'tab')."""
@@ -224,7 +234,7 @@ class KeystrokeSimulator:
         for char in text:
             if not self._check_state():
                 return
-            if not self._safe_cg_call(self._controller.type, char):
+            if not self._safe_cg_call(self._do_type_char, char):
                 return
             time.sleep(delay)
 
