@@ -601,7 +601,9 @@ class GhostTyperApp(rumps.App):
         if estimated_total > 0:
             self._run_on_main(_update)
         else:
-            self._queue_gui_update("progress", _update)
+            # A pending delivery from an older transition precedes this
+            # transition's initial ETA in the queue. Do not reuse its slot.
+            self._queue_gui_update(f"progress:{snapshot[1]}", _update)
 
     # ── Animation ──
 
