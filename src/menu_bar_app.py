@@ -166,6 +166,8 @@ class GhostTyperApp(rumps.App):
 
         # Queue for dispatching GUI updates to the main thread
         self._gui_queue: queue.Queue = queue.Queue()
+        self._gui_update_lock = threading.Lock()
+        self._gui_updates = {}
         self._gui_timer = rumps.Timer(self._process_gui_queue, 0.1)
         self._gui_timer.start()
 
@@ -340,6 +342,23 @@ class GhostTyperApp(rumps.App):
     def _run_on_main(self, fn) -> None:
         """Enqueue a callable to run on the main thread via the GUI timer."""
         self._gui_queue.put(fn)
+
+    def _queue_gui_update(self, key: str, fn) -> None:
+        """Keep only the newest replaceable update while the UI is occupied."""
+        with self._gui_update_lock:
+            if self._shutting_down:
+                return
+            pending = key in self._gui_updates
+            self._gui_updates[key] = fn
+            if pending:
+                return
+
+        def deliver():
+            with self._gui_update_lock:
+                latest = self._gui_updates.pop(key, None)
+            if latest is not None:
+                latest()
+        self._run_on_main(deliver)
 
     def _process_gui_queue(self, _timer) -> None:
         """Drain the GUI queue on the main thread (called by rumps.Timer)."""
@@ -578,7 +597,11 @@ class GhostTyperApp(rumps.App):
                 return
             self._status_item.title = f"Status: Typing... {pct}% ({remaining} left)"
             self._progress_overlay.update(chars_typed, total_chars, start_time, estimated_total)
-        self._run_on_main(_update)
+        # Preserve the initial ETA message; later progress is replaceable.
+        if estimated_total > 0:
+            self._run_on_main(_update)
+        else:
+            self._queue_gui_update("progress", _update)
 
     # ── Animation ──
 
@@ -602,7 +625,7 @@ class GhostTyperApp(rumps.App):
             frame = frames[idx % len(frames)]
             # Check stop flag inside the lambda to avoid overwriting the icon
             # if _stop_animation() was called between enqueue and execution.
-            self._run_on_main(lambda f=frame: (
+            self._queue_gui_update("animation", lambda f=frame: (
                 setattr(self, 'icon', f) if not self._animation_stop.is_set() else None
             ))
             idx += 1
