@@ -13,6 +13,7 @@ Based on research from:
 
 from __future__ import annotations
 
+from collections import deque
 import math
 import random
 import string
@@ -90,6 +91,7 @@ class TypingEngine:
         self.settings = settings or Settings()
         self.profile = profile or TypingProfile.defaults()
         self.state = TypingState()
+        self._visible_context = deque(maxlen=256)
         self._rng = random.Random()
         self._refresh_effective_wpm()
 
@@ -117,6 +119,7 @@ class TypingEngine:
 
     def reset(self) -> None:
         self.state = TypingState()
+        self._visible_context.clear()
         self._refresh_effective_wpm()
 
     def _refresh_effective_wpm(self) -> None:
@@ -539,6 +542,7 @@ class TypingEngine:
     # ------------------------------------------------------------------
 
     def on_char_typed(self, char: str) -> None:
+        self._visible_context.append(char)
         self.state.chars_typed += 1
         self.state.chars_since_peek += 1
         if char.isspace():
@@ -547,8 +551,24 @@ class TypingEngine:
             self._refresh_effective_wpm()
             self.maybe_start_burst()
         else:
-            self.state.current_word += char
+            self.state.current_word = (self.state.current_word + char)[-256:]
         self.update_fatigue()
+
+    def on_backspace(self) -> None:
+        """Update visible word context without undoing physical typing statistics."""
+        if self._visible_context:
+            self._visible_context.pop()
+        suffix = []
+        for char in reversed(self._visible_context):
+            if char.isspace():
+                break
+            suffix.append(char)
+        self.state.current_word = "".join(reversed(suffix))
+
+    def reset_word_context(self) -> None:
+        """Forget context when navigation leaves the known insertion position."""
+        self._visible_context.clear()
+        self.state.current_word = ""
 
     def on_pause(self) -> None:
         self.state.words_since_pause = 0

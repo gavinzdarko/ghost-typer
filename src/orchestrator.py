@@ -800,6 +800,9 @@ class Orchestrator:
             elif isinstance(action, ApplyFormatting):
                 p = self._profile
                 simulator.hotkey(*action.shortcut)
+                if action.shortcut[-1] in ("left", "right", "up", "down", "home", "end"):
+                    engine.reset_word_context()
+                    prev_char = ""
                 # Navigation hotkeys (word jump) are faster than formatting toggles
                 if action.shortcut[-1] in ("left", "right"):
                     simulator.wait(engine._rng.uniform(
@@ -862,6 +865,7 @@ class Orchestrator:
     ) -> str:
         """Execute a mistake: type wrong text, pause, backspace, type correct text."""
         is_quick = len(action.wrong_text) <= 2  # quick reflex correction
+        preceding_char = prev_char
 
         # Type the wrong text
         for char in action.wrong_text:
@@ -896,6 +900,7 @@ class Orchestrator:
             else:
                 simulator.wait(engine.backspace_delay(nth_backspace=i))
             simulator.press_key("backspace")
+            engine.on_backspace()
 
         # Brief pause before retyping
         if is_quick:
@@ -906,7 +911,8 @@ class Orchestrator:
         else:
             simulator.wait(engine.correction_pause_duration() * 0.5)
 
-        # Type the correct text
+        # Type the correct text from the context before the deleted mistake.
+        prev_char = preceding_char
         engine.on_error_corrected()
         for char in action.correct_text:
             if self._cancel_event.is_set() or not simulator.is_active:
@@ -942,6 +948,7 @@ class Orchestrator:
                 return ""
             simulator.wait(engine.backspace_delay(nth_backspace=i))
             simulator.press_key("backspace")
+            engine.on_backspace()
 
         # Small pause before retyping
         simulator.wait(engine.correction_pause_duration() * 0.3)
@@ -972,6 +979,9 @@ class Orchestrator:
         elif isinstance(action, ApplyFormatting):
             p = self._profile
             simulator.hotkey(*action.shortcut)
+            if action.shortcut[-1] in ("left", "right", "up", "down", "home", "end"):
+                engine.reset_word_context()
+                prev_char = ""
             if action.shortcut[-1] in ("left", "right"):
                 simulator.wait(engine._rng.uniform(
                     p.orchestration.navigation_hotkey_pause.min,
@@ -1003,6 +1013,12 @@ class Orchestrator:
             engine.on_char_typed(char)
             return ""
         simulator.press_key(action.key)
+        if action.key == "backspace":
+            engine.on_backspace()
+            return ""
+        if action.key in ("left", "right", "up", "down", "home", "end"):
+            engine.reset_word_context()
+            prev_char = ""
         if action.key in ("left", "right", "up", "down"):
             simulator.wait(engine._rng.uniform(
                 p.orchestration.arrow_key_pause.min,
@@ -1039,6 +1055,7 @@ class Orchestrator:
                 return prev_char
             simulator.wait(engine.backspace_delay(nth_backspace=i))
             simulator.press_key("backspace")
+            engine.on_backspace()
 
         # Brief pause before replacement
         simulator.wait(engine._rng.uniform(
