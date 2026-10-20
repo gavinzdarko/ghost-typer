@@ -968,7 +968,7 @@ class Orchestrator:
         simulator.wait(engine.correction_pause_duration() * 0.3)
 
         # Execute new_actions (which may contain nested Rewrites)
-        prev_char = ""
+        prev_char = engine.previous_visible_char
         for sub_action in action.new_actions:
             if self._cancel_event.is_set() or not simulator.is_active:
                 return prev_char
@@ -1029,7 +1029,7 @@ class Orchestrator:
         simulator.press_key(action.key)
         if action.key == "backspace":
             engine.on_backspace()
-            return ""
+            return engine.previous_visible_char
         if action.key in ("left", "right", "up", "down", "home", "end"):
             engine.reset_word_context()
             prev_char = ""
@@ -1078,6 +1078,7 @@ class Orchestrator:
         ))
 
         # Type replacement
+        prev_char = engine.previous_visible_char
         for char in action.replacement_text:
             if self._cancel_event.is_set():
                 return prev_char
