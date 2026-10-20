@@ -330,10 +330,18 @@ class GhostTyperApp(rumps.App):
         """Create a callback that toggles a boolean setting."""
         def callback(sender):
             new_val = sender.state == 0  # flip
+            candidate = {**self._settings_dict, key: new_val}
+            try:
+                save_settings_dict(candidate)
+            except (OSError, ValueError, TypeError):
+                logger.exception("Failed to save toggle setting %s", key)
+                self.orchestrator.notification_service.notify_error(
+                    "Could not save settings. The setting was not changed."
+                )
+                return
+            self.orchestrator.update_settings(candidate)
+            self._settings_dict = candidate
             sender.state = 1 if new_val else 0
-            self._settings_dict[key] = new_val
-            save_settings_dict(self._settings_dict)
-            self.orchestrator.update_settings(self._settings_dict)
             logger.info("Setting %s toggled to %s", key, new_val)
         return callback
 
