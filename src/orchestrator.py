@@ -99,6 +99,7 @@ class Orchestrator:
         self._typing_thread: Optional[threading.Thread] = None
         self._cancel_event = threading.Event()
         self._simulator: Optional[KeystrokeSimulator] = None
+        self._menu_open = False
 
         # Behavioral content (AI-generated, or empty dict)
         self._behavioral_content: dict = {}
@@ -197,6 +198,23 @@ class Orchestrator:
     def is_enabled(self) -> bool:
         return self.clipboard_monitor.enabled
 
+    def set_menu_open(self, value: bool) -> None:
+        """Fence new keyboard sessions while the menu owns keyboard focus."""
+        with self._session_lock:
+            self._menu_open = value
+
+    def _activate_simulator(self) -> KeystrokeSimulator:
+        """Publish a ready simulator and honor a menu opened during planning."""
+        with self._session_lock:
+            simulator = KeystrokeSimulator()
+            self._simulator = simulator
+            if getattr(self, "_menu_open", False):
+                simulator.pause()
+                self.state = OrchestratorState.PAUSED
+            else:
+                self.state = OrchestratorState.TYPING
+            return simulator
+
     def pause(self) -> None:
         """Pause the current typing session without reviving a finished worker."""
         with self._session_lock:
@@ -215,7 +233,7 @@ class Orchestrator:
     def resume(self) -> None:
         """Resume only a session that still owns its paused simulator."""
         with self._session_lock:
-            if self.state != OrchestratorState.PAUSED:
+            if self.state != OrchestratorState.PAUSED or getattr(self, "_menu_open", False):
                 return
             sim = self._simulator
             if sim is None:
@@ -435,9 +453,7 @@ class Orchestrator:
                 return
 
             # ── Execute live: Tab through cells, type items into empty ones ──
-            self.state = OrchestratorState.TYPING
-            simulator = KeystrokeSimulator()
-            self._simulator = simulator
+            simulator = self._activate_simulator()
             engine = TypingEngine(self._settings, profile=self._profile)
 
             # Keep original indices so row boundaries and unfinished items survive.
@@ -667,9 +683,7 @@ class Orchestrator:
             # ── Step 3: Execute the plan ──
             if self._wait_for_start():
                 return
-            self.state = OrchestratorState.TYPING
-            simulator = KeystrokeSimulator()
-            self._simulator = simulator
+            simulator = self._activate_simulator()
             engine = TypingEngine(self._settings, profile=self._profile)
 
             # Count ALL characters that will actually be typed (including

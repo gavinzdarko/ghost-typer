@@ -62,7 +62,8 @@ class _MenuDelegate(AppKit.NSObject):
     def menuWillOpen_(self, menu) -> None:
         app = self._app_ref
         if app and not app._shutting_down:
-            if app.orchestrator.state == OrchestratorState.TYPING:
+            app.orchestrator.set_menu_open(True)
+            if app.orchestrator.state in (OrchestratorState.TYPING, OrchestratorState.PLANNING):
                 app._menu_auto_paused = True
                 app.orchestrator.pause()
                 logger.info("Auto-paused typing (menu opened)")
@@ -70,6 +71,7 @@ class _MenuDelegate(AppKit.NSObject):
     def menuDidClose_(self, menu) -> None:
         app = self._app_ref
         if app and not app._shutting_down:
+            app.orchestrator.set_menu_open(False)
             if getattr(app, '_menu_auto_paused', False):
                 app._menu_auto_paused = False
                 if (app.orchestrator.state == OrchestratorState.PAUSED
