@@ -305,7 +305,10 @@ class TypingPlanner:
                 seg_actions, seg_chars = self._plan_segment_simple(segment)
             else:
                 seg_actions, seg_chars = self._plan_segment(
-                    segment, seg_idx, len(segments), total_paste_chars
+                    segment, seg_idx, len(segments), total_paste_chars,
+                    defer_paragraph_pause=(seg_idx + 1 < len(segments)
+                        and not segments[seg_idx + 1].text.strip()
+                        and "\n" in segments[seg_idx + 1].text),
                 )
             actions.extend(seg_actions)
             total_chars += seg_chars
@@ -352,6 +355,7 @@ class TypingPlanner:
     def _plan_segment(
         self, segment: TextSegment, seg_idx: int, total_segments: int,
         total_paste_chars: int = 500,
+        defer_paragraph_pause: bool = False,
     ) -> tuple[list[TypingAction], int]:
         """Plan actions for a single TextSegment. Returns (actions, char_count)."""
         actions: list[TypingAction] = []
@@ -363,6 +367,8 @@ class TypingPlanner:
             for char in segment.text:
                 actions.append(PressKey(key="enter") if char == "\n" else TypeText(text=char))
             self._char_position += len(segment.text)
+            if not defer_paragraph_pause:
+                actions.append(Pause(duration=self.engine.paragraph_pause_duration()))
             return actions, len(segment.text)
 
         # --- Skip all formatting — type as plain text so it inherits destination style ---
@@ -439,9 +445,10 @@ class TypingPlanner:
                 self._chunk_prefix = emitted.text
                 chunk_actions, chunk_chars, chunk_typos = self._plan_chunk(
                     chunk, misspell_by_position=chunk_misspellings, total_paste_chars=total_paste_chars,
-                    defer_paragraph_pause=(chunk_idx + 1 < len(chunks)
-                        and not chunks[chunk_idx + 1].text.strip()
-                        and "\n" in chunks[chunk_idx + 1].text),
+                    defer_paragraph_pause=((chunk_idx + 1 == len(chunks) and defer_paragraph_pause)
+                        or (chunk_idx + 1 < len(chunks)
+                            and not chunks[chunk_idx + 1].text.strip()
+                            and "\n" in chunks[chunk_idx + 1].text)),
                 )
                 actions.extend(chunk_actions)
                 char_count += chunk_chars
