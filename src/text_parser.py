@@ -143,6 +143,9 @@ class TextParser:
                     hidden = True
                 elif value in ("visible", "initial"):
                     hidden = False
+            # Keep visibility for parser-generated markers as well as literal
+            # text. A visible descendant does not restore its parent's marker.
+            node._ghost_visibility_hidden = hidden
             stack.extend((child, hidden) for child in node.children)
 
     @staticmethod
@@ -184,6 +187,7 @@ class TextParser:
 
         tag = node.name.lower() if node.name else ""
         fmt = dict(inherited_fmt)
+        visibility_hidden = bool(getattr(node, "_ghost_visibility_hidden", False))
 
         # Compute formatting from tag
         if tag in ("b", "strong"):
@@ -235,7 +239,10 @@ class TextParser:
 
         # Horizontal rule
         if tag == "hr":
-            segments.append(TextSegment(text="\n---\n", formatting={"horizontal_rule": True}))
+            if visibility_hidden:
+                segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+            else:
+                segments.append(TextSegment(text="\n---\n", formatting={"horizontal_rule": True}))
             return
 
         # Lists
@@ -274,7 +281,8 @@ class TextParser:
                 prefix = "- "
                 fmt["list_type"] = "bulleted"
 
-            segments.append(TextSegment(text=prefix, formatting=dict(fmt, list_prefix=True)))
+            if not visibility_hidden:
+                segments.append(TextSegment(text=prefix, formatting=dict(fmt, list_prefix=True)))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
             segments.append(TextSegment(text="\n", formatting={"linebreak": True}))

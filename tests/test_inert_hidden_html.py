@@ -27,3 +27,18 @@ def test_descendants_can_restore_visibility_even_inside_preformatted_text():
 
 def test_visible_override_cannot_escape_display_none_or_hidden_attribute():
     assert plain('<p>start<span hidden><b style="visibility:visible">secret</b></span>end</p>') == 'startend'
+
+
+def test_invisible_list_markers_are_suppressed_without_renumbering_visible_items():
+    assert plain('<ol><li style="visibility:hidden">secret</li><li>shown</li></ol>') == '2. shown'
+    assert plain('<ul style="visibility:hidden"><li>secret</li></ul>') == ''
+
+
+def test_invisible_list_marker_stays_hidden_when_descendant_text_is_visible():
+    assert plain('<ol><li style="visibility:hidden">secret<b style="visibility:visible">visible</b></li>'
+                 '<li>shown</li></ol>') == 'visible\n2. shown'
+
+
+def test_invisible_rule_does_not_synthesize_visible_dashes():
+    assert plain('before<hr style="visibility:hidden">after') == 'before\nafter'
+    assert plain('<hr style="visibility:hidden">') == '\n'
