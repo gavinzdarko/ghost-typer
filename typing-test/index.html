@@ -790,6 +790,7 @@ function buildConfigJSON() {
   const wpm = Math.round((cursorPos / 5 / elapsed) * 60);
   const errorRate = totalKeystrokes > 0 ? errorKeystrokes / totalKeystrokes : 0;
 
+  const ikiMean = ikiValues.reduce((sum, value) => sum + value, 0) / (ikiValues.length || 1);
   const sortedIki = [...ikiValues].sort((a,b) => a - b);
   const ikiMedian = sortedIki.length > 0 ? sortedIki[Math.floor(sortedIki.length / 2)] : 200;
 
@@ -840,9 +841,9 @@ function buildConfigJSON() {
       corrections: corrections.length,
       immediate_correction_pct: parseFloat(immediatePct.toFixed(2)),
       iki: {
-        mean_ms: Math.round(ikiValues.reduce((a,b) => a+b, 0) / (ikiValues.length || 1)),
+        mean_ms: Math.round(ikiMean),
         median_ms: Math.round(ikiMedian),
-        std_dev_ms: Math.round(Math.sqrt(ikiValues.reduce((s,v) => s + (v - ikiValues.reduce((a,b) => a+b, 0) / ikiValues.length) ** 2, 0) / (ikiValues.length - 1 || 1))),
+        std_dev_ms: Math.round(Math.sqrt(ikiValues.reduce((s,v) => s + (v - ikiMean) ** 2, 0) / Math.max(1, ikiValues.length - 1))),
         min_ms: Math.round(sortedIki[0] || 0),
         max_ms: Math.round(sortedIki[sortedIki.length - 1] || 0),
       },
