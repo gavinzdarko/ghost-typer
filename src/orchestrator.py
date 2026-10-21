@@ -457,8 +457,22 @@ class Orchestrator:
             cell_count = 0
             skipped_count = 0
 
-            self._typing_start_time = time.time()
-            self.notification_service.notify_start(0)
+            # Plan every cell once so progress describes the complete table,
+            # including temporary typo/correction characters in simple plans.
+            type_queue = []
+            for original_index, entry in enumerate(items):
+                if entry.text == _ROW_BREAK:
+                    continue
+                if self._cancel_event.is_set():
+                    return
+                segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
+                if not segments or not segments[0].text.strip():
+                    raise ValueError("Table item did not contain typable text")
+                cell_plan = self.fallback_planner.plan(
+                    segments, simple=True, cancelled=self._cancel_event.is_set)
+                word_count = sum(len(seg.text.split()) for seg in segments if seg.text.strip())
+                type_queue.append((entry, original_index, cell_plan, word_count))
+            self.notification_service.notify_start(sum(entry[3] for entry in type_queue))
 
             # Give the user time to focus the target before sending any keys.
             if self._wait_for_start():
@@ -468,8 +482,17 @@ class Orchestrator:
             simulator = self._activate_simulator()
             engine = TypingEngine(self._settings, profile=self._profile)
 
+            self._typing_start_time = time.time()
+            self._total_chars = sum(self._count_typed_chars(entry[2].actions) for entry in type_queue)
+            self._chars_typed = 0
+            chars_per_sec = ((self._settings.wpm or 60) * 5.0) / 60.0
+            self._estimated_total_time = (self._total_chars / chars_per_sec) * 1.4
+            if self.on_progress:
+                try:
+                    self.on_progress(0, self._total_chars, self._typing_start_time, self._estimated_total_time)
+                except Exception:
+                    logger.debug("Progress callback failed", exc_info=True)
             # Keep original indices so row boundaries and unfinished items survive.
-            type_queue = [(item, index) for index, item in enumerate(items) if item.text != _ROW_BREAK]
             queue_index = 0
             is_first_cell = True
             row_skip_applied = False
@@ -482,7 +505,7 @@ class Orchestrator:
 
                 cells_visited += 1
 
-                entry, original_index = type_queue[queue_index]
+                entry, original_index, cell_plan, word_count = type_queue[queue_index]
                 # A blank-line row separator means the next ordinary TAB crosses
                 # the row boundary, followed by the configured label columns.
                 has_row_break = any(item.text == _ROW_BREAK for item in items[consumed_items:original_index])
@@ -506,22 +529,13 @@ class Orchestrator:
                     # DON'T advance queue_index — save this item for the next empty cell
                     continue
 
-                # Cell is empty — type the next queued item into it
-                segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
-                if segments and segments[0].text.strip():
-                    cell_plan = self.fallback_planner.plan(segments, simple=True, cancelled=self._cancel_event.is_set)
-
-                    self._total_chars = self._count_typed_chars(cell_plan.actions)
-                    self._chars_typed = 0
-                    self._execute_plan(cell_plan, engine, simulator)
-                    if self._cancel_event.is_set() or not simulator.is_active:
-                        return
-
-                    total_word_count += sum(
-                        len(seg.text.split()) for seg in segments if seg.text.strip()
-                    )
-                else:
-                    raise ValueError("Table item did not contain typable text")
+                # Cell is empty — execute its prepared plan without resetting
+                # the complete session's character counters or elapsed time.
+                engine.reset_word_context()
+                self._execute_plan(cell_plan, engine, simulator)
+                if self._cancel_event.is_set() or not simulator.is_active:
+                    return
+                total_word_count += word_count
                 queue_index += 1
                 consumed_items = original_index + 1
                 row_skip_applied = False
