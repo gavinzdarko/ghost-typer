@@ -14,6 +14,9 @@ def test_structural_keys_reset_runtime_word_and_count_as_typed_events(key, neste
     target = Orchestrator.__new__(Orchestrator)
     target._cancel_event = threading.Event()
     target._profile = TypingProfile.defaults()
+    target._chars_typed = 0
+    target._total_chars = 1
+    target._typing_start_time = 0.0
     engine = TypingEngine(Settings())
     for char in 'word':
         engine.on_char_typed(char)
@@ -36,6 +39,9 @@ def test_cancelled_structural_delay_emits_no_key_and_does_not_claim_a_boundary()
     target = Orchestrator.__new__(Orchestrator)
     target._cancel_event = threading.Event()
     target._profile = TypingProfile.defaults()
+    target._chars_typed = 0
+    target._total_chars = 1
+    target._typing_start_time = 0.0
     engine = TypingEngine(Settings())
     engine.on_char_typed('a')
     simulator = Mock(is_active=True)
@@ -49,6 +55,9 @@ def test_navigation_forgets_word_context_without_counting_as_typed_text():
     target = Orchestrator.__new__(Orchestrator)
     target._cancel_event = threading.Event()
     target._profile = TypingProfile.defaults()
+    target._chars_typed = 0
+    target._total_chars = 1
+    target._typing_start_time = 0.0
     engine = TypingEngine(Settings())
     engine.on_char_typed('a')
     target._execute_action(PressKey(key='left'), engine, Mock(is_active=True), 'a')
