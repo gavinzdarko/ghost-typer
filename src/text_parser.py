@@ -333,6 +333,10 @@ class TextParser:
         # Pre-formatted / code block
         if tag == "pre":
             fmt["preformatted"] = True
+            # BR remains a rendered line break inside preformatted content;
+            # get_text() alone discards empty elements and joins both lines.
+            for br in node.find_all("br"):
+                br.replace_with("\n")
             text = node.get_text()
             segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             segments.append(TextSegment(text=text, formatting=dict(fmt)))
