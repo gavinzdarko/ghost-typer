@@ -14,6 +14,7 @@ import logging
 import subprocess
 import tempfile
 import time
+from threading import Event
 from pathlib import Path
 from typing import Optional
 
@@ -115,6 +116,7 @@ class VisualVerifier:
         intended_text: str,
         region: Optional[tuple[int, int, int, int]] = None,
         delay_before_capture: float = 1.0,
+        cancel_event: Optional[Event] = None,
     ) -> VerificationResult:
         """Verify that what was typed matches the intended text.
 
@@ -133,13 +135,19 @@ class VisualVerifier:
                 message="Verification skipped (disabled)",
             )
 
+        if cancel_event is not None and cancel_event.is_set():
+            return VerificationResult(False, 0.0, "Verification cancelled")
+
         if not HAS_TESSERACT:
             return VerificationResult(
                 success=False, match_ratio=0.0,
                 message="OCR verification unavailable: install Tesseract and the verification extras",
             )
 
-        time.sleep(delay_before_capture)
+        if cancel_event is None:
+            time.sleep(delay_before_capture)
+        elif cancel_event.wait(max(0.0, delay_before_capture)):
+            return VerificationResult(False, 0.0, "Verification cancelled")
 
         # Capture screenshot
         screenshot = self.capture_screen(region)
@@ -151,7 +159,11 @@ class VisualVerifier:
             )
 
         try:
+            if cancel_event is not None and cancel_event.is_set():
+                return VerificationResult(False, 0.0, "Verification cancelled")
             extracted = self.extract_text(screenshot)
+            if cancel_event is not None and cancel_event.is_set():
+                return VerificationResult(False, 0.0, "Verification cancelled")
             if extracted is None:
                 return VerificationResult(
                     success=False, match_ratio=0.0, message="OCR extraction failed",

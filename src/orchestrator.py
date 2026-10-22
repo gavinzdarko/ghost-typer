@@ -743,7 +743,9 @@ class Orchestrator:
             if self.visual_verifier.enabled:
                 self.state = OrchestratorState.VERIFYING
                 logger.info("Running visual verification...")
-                result = self.visual_verifier.verify(intended_text)
+                result = self.visual_verifier.verify(intended_text, cancel_event=self._cancel_event)
+                if self._cancel_event.is_set():
+                    return
                 logger.info("Verification: %s", result)
                 if not result.success:
                     self.notification_service.notify_error(

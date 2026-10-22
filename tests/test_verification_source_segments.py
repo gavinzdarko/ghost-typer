@@ -17,4 +17,4 @@ def test_verification_preserves_adjacency_across_formatting_segments():
     target.visual_verifier = Mock(enabled=True)
     with patch("src.orchestrator.KeystrokeSimulator", return_value=Mock(is_active=True)):
         target._typing_pipeline(ClipboardContent("source"))
-    target.visual_verifier.verify.assert_called_once_with("unbreakable\n\nNext.")
+    target.visual_verifier.verify.assert_called_once_with("unbreakable\n\nNext.", cancel_event=target._cancel_event)
