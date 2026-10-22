@@ -401,15 +401,12 @@ class TypingAnalyzer:
         total_chars = len(typing_events)
 
         # --- WPM ---
-        if self.rolling_wpms:
-            avg_wpm = statistics.mean(self.rolling_wpms)
-            wpm_stdev = statistics.stdev(self.rolling_wpms) if len(self.rolling_wpms) > 1 else 5
-        elif self.word_wpms:
-            avg_wpm = statistics.mean(self.word_wpms)
-            wpm_stdev = statistics.stdev(self.word_wpms) if len(self.word_wpms) > 1 else 5
-        else:
-            avg_wpm = (total_chars / 5) / (total_duration / 60)
-            wpm_stdev = 5
+        # Session speed includes every typed character and all elapsed time.
+        # Averaging word rates weights tiny words equally with long ones,
+        # drops an unfinished final word, and sliding windows omit the tail.
+        avg_wpm = (total_chars / 5) / (total_duration / 60)
+        speed_samples = self.rolling_wpms or self.word_wpms
+        wpm_stdev = statistics.stdev(speed_samples) if len(speed_samples) > 1 else 5
 
         # --- Error rate ---
         # Approximate: each correction = at least 1 error
