@@ -42,6 +42,20 @@ def test_blank_key_can_be_cleared():
     assert target._settings_dict['anthropic_api_key'] == ''
 
 
+@pytest.mark.parametrize('key', ['anthropic_api_key', 'webhook_url'])
+@pytest.mark.parametrize('error', [OSError('disk full'), ValueError('invalid config')])
+def test_failed_connection_save_reports_failure_and_preserves_live_settings(key, error):
+    value = 'new-secret' if key == 'anthropic_api_key' else 'https://example.com/hook'
+    callback, target, scope = callback_for(key, SimpleNamespace(clicked=True, text=value))
+    before = target._settings_dict.copy()
+    scope['save_settings_dict'].side_effect = error
+    callback(None)
+    assert target._settings_dict == before
+    target.orchestrator.update_settings.assert_not_called()
+    target.orchestrator.notification_service.notify_error.assert_called_once()
+    assert value not in str(scope['logger'].mock_calls)
+
+
 @pytest.mark.parametrize('value', ['file:///tmp/webhook', 'not a url', 'https://[invalid'])
 def test_invalid_webhook_is_not_saved(value):
     callback, target, scope = callback_for('webhook_url', SimpleNamespace(clicked=True, text=value))
