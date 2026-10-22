@@ -177,7 +177,9 @@ class TextParser:
             # Collapse whitespace first (handles "\n  " from prettified HTML)
             # HTML collapses ASCII layout whitespace, while nonbreaking,
             # thin, and em spaces remain visible source characters.
-            collapsed = re.sub(r"[ \t\r\n\f]+", " ", text)
+            collapsed = (text.replace("\r\n", "\n").replace("\r", "\n")
+                         if inherited_fmt.get("preformatted")
+                         else re.sub(r"[ \t\r\n\f]+", " ", text))
             if collapsed:
                 segments.append(TextSegment(text=collapsed, formatting=dict(inherited_fmt)))
             return
@@ -209,6 +211,19 @@ class TextParser:
         style = node.get("style", "")
         if style:
             self._apply_inline_styles(style, fmt)
+
+        # Rich clipboard producers often use CSS rather than PRE elements.
+        # white-space is inherited, with normal/nowrap restoring collapse.
+        whitespace = re.findall(r"(?:^|;)\s*white-space\s*:\s*([^;]+)", style, re.IGNORECASE)
+        if whitespace:
+            important = [value for value in whitespace
+                         if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+            mode = re.sub(r"!\s*important\s*$", "", (important or whitespace)[-1],
+                          flags=re.IGNORECASE).strip().lower()
+            if mode in ("pre", "pre-wrap", "break-spaces"):
+                fmt["preformatted"] = True
+            elif mode in ("normal", "nowrap", "initial"):
+                fmt.pop("preformatted", None)
 
         # Headings
         if tag in self.HEADING_TAGS:
