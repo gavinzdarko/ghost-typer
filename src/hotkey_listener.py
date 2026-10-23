@@ -46,6 +46,7 @@ class HotkeyListener:
         self._suppressed = False  # True while typing engine is active
         self._pressed_modifiers = {name: set() for name in ("shift", "ctrl", "cmd")}
         self._f6_down = False
+        self._v_down = False
         self._lifecycle_lock = threading.Lock()
 
     def start(self) -> None:
@@ -81,6 +82,7 @@ class HotkeyListener:
             keys.clear()
         self._shift_pressed = self._ctrl_pressed = self._cmd_pressed = False
         self._f6_down = False
+        self._v_down = False
         self._suppressed = False
 
     def suppress(self) -> None:
@@ -140,6 +142,11 @@ class HotkeyListener:
 
         # Cmd+V = paste trigger
         if self._cmd_pressed and self._is_v_key(key):
+            # A held paste key must not spawn unbounded callbacks, especially
+            # while a paused table probe owns the clipboard transaction lock.
+            if self._v_down:
+                return
+            self._v_down = True
             if self._on_paste:
                 logger.info("HOTKEY: Cmd+V — Paste trigger")
                 threading.Thread(target=self._on_paste, daemon=True).start()
@@ -165,3 +172,5 @@ class HotkeyListener:
             setattr(self, f"_{mod}_pressed", bool(self._pressed_modifiers[mod]))
         if key == keyboard.Key.f6:
             self._f6_down = False
+        if self._is_v_key(key):
+            self._v_down = False
