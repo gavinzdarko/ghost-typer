@@ -111,7 +111,7 @@ class TextParser:
             seg.formatting = {k: v for k, v in seg.formatting.items()
                               if k in ("paragraph_break", "linebreak", "list_type",
                                        "list_index", "list_prefix", "heading_level", "preformatted",
-                                       "explicit_break_count")}
+                                       "explicit_break_count", "_white_space")}
 
         return self._clean_segments(segments)
 
@@ -177,7 +177,9 @@ class TextParser:
             # Collapse whitespace first (handles "\n  " from prettified HTML)
             # HTML collapses ASCII layout whitespace, while nonbreaking,
             # thin, and em spaces remain visible source characters.
-            collapsed = re.sub(r"[ \t\r\n\f]+", " ", text)
+            collapsed = (text.replace("\r\n", "\n").replace("\r", "\n")
+                         if inherited_fmt.get("preformatted")
+                         else re.sub(r"[ \t\r\n\f]+", " ", text))
             if collapsed:
                 segments.append(TextSegment(text=collapsed, formatting=dict(inherited_fmt)))
             return
@@ -187,6 +189,11 @@ class TextParser:
 
         tag = node.name.lower() if node.name else ""
         fmt = dict(inherited_fmt)
+        if tag == "pre":
+            # PRE's own default overrides a parent's inherited pre-line mode.
+            # Its explicit inline white-space declaration is considered below.
+            fmt["preformatted"] = True
+            fmt["_white_space"] = "pre"
         visibility_hidden = bool(getattr(node, "_ghost_visibility_hidden", False))
 
         # Compute formatting from tag
@@ -209,6 +216,24 @@ class TextParser:
         style = node.get("style", "")
         if style:
             self._apply_inline_styles(style, fmt)
+
+        # Rich clipboard producers often use CSS rather than PRE elements.
+        # white-space is inherited, with normal/nowrap restoring collapse.
+        whitespace = re.findall(r"(?:^|;)\s*white-space\s*:\s*([^;]+)", style, re.IGNORECASE)
+        if whitespace:
+            important = [value for value in whitespace
+                         if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+            mode = re.sub(r"!\s*important\s*$", "", (important or whitespace)[-1],
+                          flags=re.IGNORECASE).strip().lower()
+            if mode in ("pre", "pre-wrap", "break-spaces"):
+                fmt["preformatted"] = True
+                fmt["_white_space"] = "pre"
+            elif mode == "pre-line":
+                fmt["preformatted"] = True
+                fmt["_white_space"] = "pre-line"
+            elif mode in ("normal", "nowrap", "initial"):
+                fmt.pop("preformatted", None)
+                fmt.pop("_white_space", None)
 
         # Headings
         if tag in self.HEADING_TAGS:
@@ -442,22 +467,42 @@ class TextParser:
 
         # Merge adjacent text segments into larger plain-text chunks.
         merged: list[TextSegment] = []
-        inline_parts: list[str] = []
+        inline_runs: list[tuple[bool, list[str]]] = []
 
         def flush_inline() -> None:
-            if inline_parts:
-                # Join and normalize each inline run once. Repeatedly joining
-                # the growing prefix rescans quadratic amounts of clipboard text.
-                merged.append(TextSegment(text=re.sub(r" +", " ", "".join(inline_parts)), formatting={}))
-                inline_parts.clear()
+            if inline_runs:
+                # CSS whitespace changes within one paragraph must not become
+                # separate planner paragraphs. Normalize only collapsible runs,
+                # then join the whole inline region in linear work.
+                parts = []
+                for preserve, values in inline_runs:
+                    part = "".join(values)
+                    if not preserve:
+                        part = re.sub(r" *\n *", "\n", re.sub(r"[ \t\f]+", " ", part))
+                    parts.append(part)
+                if not inline_runs[0][0]:
+                    parts[0] = parts[0].lstrip(" ")
+                if not inline_runs[-1][0]:
+                    parts[-1] = parts[-1].rstrip(" ")
+                fmt = ({"preformatted": True}
+                       if any(preserve for preserve, _ in inline_runs) or any("\n" in part for part in parts)
+                       else {})
+                merged.append(TextSegment(text="".join(parts), formatting=fmt))
+                inline_runs.clear()
 
         for seg in cleaned:
             is_break = seg.formatting.get("paragraph_break") or seg.formatting.get("linebreak")
-            if is_break or seg.formatting.get("preformatted"):
+            if is_break:
                 flush_inline()
                 merged.append(seg)
                 continue
-            inline_parts.append(seg.text)
+            # Normal and pre-line both collapse spaces, including at their
+            # shared inline boundary. Only true pre modes split those runs.
+            preserve = bool(seg.formatting.get("preformatted")
+                            and seg.formatting.get("_white_space") != "pre-line")
+            if not inline_runs or inline_runs[-1][0] != preserve:
+                inline_runs.append((preserve, []))
+            inline_runs[-1][1].append(seg.text)
         flush_inline()
 
         # HTML whitespace at block edges does not produce visible content.
