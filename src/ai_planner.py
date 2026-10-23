@@ -218,20 +218,16 @@ Include {(max(1, int(word_count * self.settings.error_rate)) if self.settings.er
             except json.JSONDecodeError:
                 pass
 
-        # Try to find any JSON object
-        brace_start = text.find("{")
-        if brace_start >= 0:
-            depth = 0
-            for i in range(brace_start, len(text)):
-                if text[i] == "{":
-                    depth += 1
-                elif text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            return json.loads(text[brace_start : i + 1])
-                        except json.JSONDecodeError:
-                            break
+        # Decode JSON strings and escapes correctly: source text can contain
+        # literal braces that must not be mistaken for object delimiters.
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", text):
+            try:
+                data, _ = decoder.raw_decode(text, match.start())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                return data
 
         logger.warning("Failed to parse JSON from AI response")
         return None
