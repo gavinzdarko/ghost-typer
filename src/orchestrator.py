@@ -1053,6 +1053,7 @@ class Orchestrator:
                 return prev_char
             simulator.press_key(action.key)
             engine.on_char_typed(char)
+            self._record_typed_character()
             return ""
         simulator.press_key(action.key)
         if action.key == "backspace":
@@ -1143,6 +1144,8 @@ class Orchestrator:
                 total += self._count_typed_chars(a.new_actions)
             elif isinstance(a, AbandonWord):
                 total += len(a.partial_text) + len(a.replacement_text)
+            elif isinstance(a, PressKey) and a.key in {"enter", "return", "tab", "space"}:
+                total += 1
             elif isinstance(a, DistractionPause):
                 pass  # No characters typed
         return total
