@@ -1096,6 +1096,9 @@ class AIProfileGenerator:
                 }],
             )
 
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                logger.warning("AI profile response exceeded its token budget; using defaults")
+                return TypingProfile.defaults()
             response_text = response.content[0].text.strip()
             # Strip markdown fences if present
             if response_text.startswith("```"):
@@ -1137,6 +1140,9 @@ class AIProfileGenerator:
                 }],
             )
 
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                logger.warning("AI behavioral response exceeded its token budget; using defaults")
+                return {}
             response_text = response.content[0].text.strip()
             if response_text.startswith("```"):
                 response_text = re.sub(r"^```\w*\n?", "", response_text)
