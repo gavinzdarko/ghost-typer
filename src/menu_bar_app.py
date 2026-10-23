@@ -239,7 +239,14 @@ class GhostTyperApp(rumps.App):
                     )
                     return
             candidate = {**self._settings_dict, key: value}
-            save_settings_dict(candidate)
+            try:
+                save_settings_dict(candidate)
+            except (OSError, ValueError, TypeError):
+                logger.exception("Failed to save connection setting %s", key)
+                self.orchestrator.notification_service.notify_error(
+                    "Could not save settings. The setting was not changed."
+                )
+                return
             self._settings_dict = candidate
             self.orchestrator.update_settings(candidate)
             logger.info("Connection setting %s updated", key)
@@ -283,6 +290,11 @@ class GhostTyperApp(rumps.App):
                 except (ValueError, TypeError):
                     self.orchestrator.notification_service.notify_error(
                         f"Invalid {name} value; enter a valid {typ.__name__}."
+                    )
+                except OSError:
+                    logger.exception("Failed to save numeric setting %s", key)
+                    self.orchestrator.notification_service.notify_error(
+                        "Could not save settings. The setting was not changed."
                     )
         return callback
 
