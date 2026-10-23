@@ -111,7 +111,7 @@ class TextParser:
             seg.formatting = {k: v for k, v in seg.formatting.items()
                               if k in ("paragraph_break", "linebreak", "list_type",
                                        "list_index", "list_prefix", "heading_level", "preformatted",
-                                       "explicit_break_count")}
+                                       "explicit_break_count", "_white_space")}
 
         return self._clean_segments(segments)
 
@@ -222,8 +222,13 @@ class TextParser:
                           flags=re.IGNORECASE).strip().lower()
             if mode in ("pre", "pre-wrap", "break-spaces"):
                 fmt["preformatted"] = True
+                fmt["_white_space"] = "pre"
+            elif mode == "pre-line":
+                fmt["preformatted"] = True
+                fmt["_white_space"] = "pre-line"
             elif mode in ("normal", "nowrap", "initial"):
                 fmt.pop("preformatted", None)
+                fmt.pop("_white_space", None)
 
         # Headings
         if tag in self.HEADING_TAGS:
@@ -453,22 +458,40 @@ class TextParser:
 
         # Merge adjacent text segments into larger plain-text chunks.
         merged: list[TextSegment] = []
-        inline_parts: list[str] = []
+        inline_runs: list[tuple[str, list[str]]] = []
 
         def flush_inline() -> None:
-            if inline_parts:
-                # Join and normalize each inline run once. Repeatedly joining
-                # the growing prefix rescans quadratic amounts of clipboard text.
-                merged.append(TextSegment(text=re.sub(r" +", " ", "".join(inline_parts)), formatting={}))
-                inline_parts.clear()
+            if inline_runs:
+                # CSS whitespace changes within one paragraph must not become
+                # separate planner paragraphs. Normalize only collapsible runs,
+                # then join the whole inline region in linear work.
+                parts = []
+                for mode, values in inline_runs:
+                    part = "".join(values)
+                    if mode == "pre-line":
+                        part = re.sub(r" *\n *", "\n", re.sub(r"[ \t\f]+", " ", part))
+                    elif mode == "normal":
+                        part = re.sub(r" +", " ", part)
+                    parts.append(part)
+                if inline_runs[0][0] != "pre":
+                    parts[0] = parts[0].lstrip(" ")
+                if inline_runs[-1][0] != "pre":
+                    parts[-1] = parts[-1].rstrip(" ")
+                fmt = {"preformatted": True} if any(mode != "normal" for mode, _ in inline_runs) else {}
+                merged.append(TextSegment(text="".join(parts), formatting=fmt))
+                inline_runs.clear()
 
         for seg in cleaned:
             is_break = seg.formatting.get("paragraph_break") or seg.formatting.get("linebreak")
-            if is_break or seg.formatting.get("preformatted"):
+            if is_break:
                 flush_inline()
                 merged.append(seg)
                 continue
-            inline_parts.append(seg.text)
+            mode = (seg.formatting.get("_white_space", "pre")
+                    if seg.formatting.get("preformatted") else "normal")
+            if not inline_runs or inline_runs[-1][0] != mode:
+                inline_runs.append((mode, []))
+            inline_runs[-1][1].append(seg.text)
         flush_inline()
 
         # HTML whitespace at block edges does not produce visible content.
