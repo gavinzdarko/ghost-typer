@@ -418,13 +418,20 @@ class GhostTyperApp(rumps.App):
 
     def _pause_resume(self, sender: rumps.MenuItem) -> None:
         """Pause or resume current typing."""
-        if getattr(self, '_settings_modal_active', False):
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         state = self.orchestrator.state
         if state == OrchestratorState.TYPING:
             self.orchestrator.pause()
         elif state == OrchestratorState.PAUSED:
-            self.orchestrator.resume()
+            if getattr(self.orchestrator, "_menu_open", False):
+                # The menu itself paused an active session. A user's Pause
+                # click takes ownership; a Resume click on an existing manual
+                # pause schedules resume after the menu stops receiving keys.
+                self._menu_auto_paused = not getattr(self, "_menu_auto_paused", False)
+                self._pause_item.title = "Pause" if self._menu_auto_paused else "Resume"
+            else:
+                self.orchestrator.resume()
 
     def _cancel(self, _sender: rumps.MenuItem) -> None:
         """Cancel current typing."""
@@ -494,11 +501,9 @@ class GhostTyperApp(rumps.App):
         """F6 pressed — toggle pause/resume."""
         if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
-        state = self.orchestrator.state
-        if state == OrchestratorState.TYPING:
-            self.orchestrator.pause()
-        elif state == OrchestratorState.PAUSED:
-            self.orchestrator.resume()
+        # Menu delegates and menu actions run on AppKit's main thread. Apply
+        # hotkey intent there too so menu dismissal cannot race ownership edits.
+        self._run_on_main(lambda: self._pause_resume(None))
 
     def _hotkey_emergency_stop(self) -> None:
         """Shift+F6 pressed — cancel current typing immediately."""
@@ -595,7 +600,7 @@ class GhostTyperApp(rumps.App):
             elif new_state == OrchestratorState.PAUSED:
                 self.icon = ICON_PAUSED
                 self._status_item.title = "Status: Paused"
-                self._pause_item.title = "Resume"
+                self._pause_item.title = "Pause" if self._menu_auto_paused else "Resume"
                 self._pause_item.set_callback(self._pause_resume)
                 self._cancel_item.set_callback(self._cancel)
                 self._stop_animation()
