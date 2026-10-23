@@ -133,7 +133,11 @@ class HumanErrors:
             - misspellings_to_fix is a list of (wrong, correct, pos) that the
               typing engine should type wrong then fix
         """
-        if (not self.is_enabled or not text.strip()
+        if (not self.is_enabled
+                or not any(rate > 0 for rate in (self.misspelling_rate,
+                                                 self.grammar_error_rate,
+                                                 self.punctuation_error_rate))
+                or not text.strip()
                 or len(text) > self.MAX_INPUT_CHARS or not self._reserve_request()):
             return text, []
 
