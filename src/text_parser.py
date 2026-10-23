@@ -167,7 +167,7 @@ class TextParser:
         inherited_fmt: dict,
         segments: list[TextSegment],
         list_context: Optional[str],
-        list_counter: Optional[list[int]],
+        list_counter: Optional[list[int | str]],
     ) -> None:
         """Recursively walk the DOM tree building TextSegments."""
         if isinstance(node, (Comment, Declaration, Doctype, ProcessingInstruction)):
@@ -278,7 +278,7 @@ class TextParser:
                 start = int(node.get("start", default_start))
             except (TypeError, ValueError):
                 start = default_start
-            counter = [start - step, step]
+            counter = [start - step, step, node.get("type", "1")]
             segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context="numbered", list_counter=counter)
@@ -299,7 +299,8 @@ class TextParser:
                     list_counter[0] = int(node["value"]) if node.has_attr("value") else list_counter[0] + step
                 except (TypeError, ValueError):
                     list_counter[0] += step
-                prefix = f"{list_counter[0]}. "
+                marker_type = node.get("type", list_counter[2])
+                prefix = f"{self._ordered_marker(list_counter[0], marker_type)}. "
                 fmt["list_type"] = "numbered"
                 fmt["list_index"] = list_counter[0]
             else:
@@ -371,6 +372,28 @@ class TextParser:
         # Default: recurse into children
         for child in node.children:
             self._walk_node(child, fmt, segments, list_context, list_counter)
+
+    @staticmethod
+    def _ordered_marker(number: int, marker_type: str) -> str:
+        """Render HTML's decimal, alphabetic, and Roman ordered-list markers."""
+        if marker_type in ("a", "A") and number > 0:
+            letters = []
+            while number:
+                number, remainder = divmod(number - 1, 26)
+                letters.append(chr(ord("a") + remainder))
+            marker = "".join(reversed(letters))
+            return marker.upper() if marker_type == "A" else marker
+        if marker_type in ("i", "I") and 0 < number < 4000:
+            parts = []
+            for value, letters in ((1000, "M"), (900, "CM"), (500, "D"),
+                                   (400, "CD"), (100, "C"), (90, "XC"),
+                                   (50, "L"), (40, "XL"), (10, "X"),
+                                   (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+                count, number = divmod(number, value)
+                parts.append(letters * count)
+            marker = "".join(parts)
+            return marker.lower() if marker_type == "i" else marker
+        return str(number)
 
     def _apply_inline_styles(self, style: str, fmt: dict) -> None:
         """Extract relevant CSS properties from an inline style string."""
