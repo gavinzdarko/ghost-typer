@@ -11,6 +11,7 @@ After Ghost Typer finishes typing, this module can:
 from __future__ import annotations
 
 import logging
+from importlib.util import find_spec
 import subprocess
 import tempfile
 import time
@@ -19,22 +20,11 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Try to import optional dependencies
-try:
-    import cv2
-    import numpy as np
-    HAS_OPENCV = True
-except ImportError:
-    HAS_OPENCV = False
-    logger.info("OpenCV not available — visual verification will use basic mode")
-
-try:
-    import pytesseract
-    from PIL import Image
-    HAS_TESSERACT = True
-except ImportError:
-    HAS_TESSERACT = False
-    logger.info("Tesseract/Pillow not available — OCR verification disabled")
+# Discover extras without importing their native libraries or data-science
+# dependencies during every app startup. Most sessions never enable OCR.
+HAS_OPENCV = find_spec("cv2") is not None and find_spec("numpy") is not None
+HAS_TESSERACT = find_spec("pytesseract") is not None and find_spec("PIL") is not None
+cv2 = np = pytesseract = Image = None
 
 
 class VisualVerifier:
@@ -95,6 +85,14 @@ class VisualVerifier:
             return None
 
         try:
+            global cv2, np, pytesseract, Image
+            if Image is None:
+                from PIL import Image
+            if pytesseract is None:
+                import pytesseract
+            if HAS_OPENCV and cv2 is None:
+                import cv2
+                import numpy as np
             with Image.open(image_path) as source:
                 if HAS_OPENCV:
                     img_array = np.array(source.convert("RGB"))
