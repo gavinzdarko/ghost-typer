@@ -295,45 +295,45 @@ class TypingPlanner:
         self._char_position = 0  # cumulative char position across all segments
 
         # Track cumulative text typed so far (for revisit targeting)
-        typed_so_far = ""
-        navigation_valid = True
+        emitted = PlannedText(track_typos=True,
+                              max_typo_distance=self.profile.proofread.max_proofread_distance)
 
         for seg_idx, segment in enumerate(segments):
             self._check_cancelled()
-            self._typed_prefix = typed_so_far
             if simple:
                 seg_actions, seg_chars = self._plan_segment_simple(segment)
             else:
                 seg_actions, seg_chars = self._plan_segment(
-                    segment, seg_idx, len(segments), total_paste_chars,
+                    segment, seg_idx, len(segments), total_paste_chars, emitted_state=emitted,
                     defer_paragraph_pause=(seg_idx + 1 < len(segments)
                         and not segments[seg_idx + 1].text.strip()
                         and "\n" in segments[seg_idx + 1].text),
                 )
             actions.extend(seg_actions)
             total_chars += seg_chars
-            state = PlannedText(typed_so_far).apply(seg_actions)
-            navigation_valid = navigation_valid and state.valid
-            typed_so_far = state.text
+            if simple:
+                emitted.apply(seg_actions)
 
             # At paragraph boundaries, occasionally go back and revise earlier text
             if (
                 not simple
-                and navigation_valid
+                and emitted.valid
                 and seg_idx > 0
                 and seg_idx < len(segments) - 1
                 and total_paste_chars > 300
             ):
                 revisit_actions = self._maybe_build_revisit(
-                    typed_so_far, total_paste_chars
+                    emitted, total_paste_chars
                 )
                 if revisit_actions:
                     actions.extend(revisit_actions)
-                    typed_so_far = PlannedText(typed_so_far).apply(revisit_actions).text
+                    emitted.apply(revisit_actions)
 
         # --- Final proofreading pass (Feature 13) ---
         if not simple:
-            proofread_actions = self._build_final_proofread(typed_so_far) if navigation_valid else []
+            proofread_actions = (self._build_final_proofread(emitted.text)
+                                 if emitted.valid and self._behavioral_content.get("proofreading_fixes")
+                                 else [])
             if proofread_actions:
                 actions.extend(proofread_actions)
 
@@ -356,6 +356,7 @@ class TypingPlanner:
         self, segment: TextSegment, seg_idx: int, total_segments: int,
         total_paste_chars: int = 500,
         defer_paragraph_pause: bool = False,
+        emitted_state: PlannedText | None = None,
     ) -> tuple[list[TypingAction], int]:
         """Plan actions for a single TextSegment. Returns (actions, char_count)."""
         actions: list[TypingAction] = []
@@ -369,6 +370,8 @@ class TypingPlanner:
             self._char_position += len(segment.text)
             if not defer_paragraph_pause:
                 actions.append(Pause(duration=self.engine.paragraph_pause_duration()))
+            if emitted_state is not None:
+                emitted_state.apply(actions)
             return actions, len(segment.text)
 
         # --- Skip all formatting — type as plain text so it inherits destination style ---
@@ -392,8 +395,9 @@ class TypingPlanner:
         sentences_since_thought_pause = 0
         # Every 2-4 sentences without a thought boundary, insert a thought pause
         next_thought_pause_at = self._rng.randint(self.profile.pauses.thought_pause_sentences_interval.min, self.profile.pauses.thought_pause_sentences_interval.max)
-        emitted = PlannedText(self._typed_prefix, track_typos=True,
-                              max_typo_distance=self.profile.proofread.max_proofread_distance)
+        emitted = (emitted_state if emitted_state is not None else
+                   PlannedText(self._typed_prefix, track_typos=True,
+                               max_typo_distance=self.profile.proofread.max_proofread_distance))
         applied_actions = 0
 
         segment_offset = 0
@@ -967,7 +971,7 @@ class TypingPlanner:
     # ------------------------------------------------------------------
 
     def _maybe_build_revisit(
-        self, typed_so_far: str, total_paste_chars: int,
+        self, typed_so_far: str | PlannedText, total_paste_chars: int,
     ) -> list[TypingAction]:
         """Possibly build a revisit sequence to go back and edit earlier text.
 
@@ -982,8 +986,7 @@ class TypingPlanner:
             return []
         # Rejected/failed AI proposals still cost a request. Non-ASCII cursor
         # edits are unsupported, so do not request proposals we cannot execute.
-        if (not typed_so_far.isascii()
-                or getattr(self, "_revisit_requests", 0) >= min(max_revisits, self.MAX_REVISIT_REQUESTS_PER_PLAN)):
+        if getattr(self, "_revisit_requests", 0) >= min(max_revisits, self.MAX_REVISIT_REQUESTS_PER_PLAN):
             return []
 
         # Scale probability with text length — more text = more likely to revisit
@@ -996,6 +999,13 @@ class TypingPlanner:
             return []
 
         if not self._ai_rewriter or not self._ai_rewriter.is_enabled:
+            return []
+
+        if isinstance(typed_so_far, PlannedText):
+            typed_so_far = typed_so_far.text
+        if not typed_so_far.isascii():
+            # Relative native navigation remains unsupported for this region.
+            self._revisit_requests = self.MAX_REVISIT_REQUESTS_PER_PLAN
             return []
 
         # Ask AI to pick revision targets from what's been typed so far
