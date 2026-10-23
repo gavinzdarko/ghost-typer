@@ -406,7 +406,7 @@ class GhostTyperApp(rumps.App):
 
     def _pause_resume(self, sender: rumps.MenuItem) -> None:
         """Pause or resume current typing."""
-        if getattr(self, '_settings_modal_active', False):
+        if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
         state = self.orchestrator.state
         if state == OrchestratorState.TYPING:
@@ -417,6 +417,7 @@ class GhostTyperApp(rumps.App):
                 # click takes ownership; a Resume click on an existing manual
                 # pause schedules resume after the menu stops receiving keys.
                 self._menu_auto_paused = not getattr(self, "_menu_auto_paused", False)
+                self._pause_item.title = "Pause" if self._menu_auto_paused else "Resume"
             else:
                 self.orchestrator.resume()
 
@@ -488,7 +489,9 @@ class GhostTyperApp(rumps.App):
         """F6 pressed — toggle pause/resume."""
         if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
-        self._pause_resume(None)
+        # Menu delegates and menu actions run on AppKit's main thread. Apply
+        # hotkey intent there too so menu dismissal cannot race ownership edits.
+        self._run_on_main(lambda: self._pause_resume(None))
 
     def _hotkey_emergency_stop(self) -> None:
         """Shift+F6 pressed — cancel current typing immediately."""
