@@ -167,7 +167,9 @@ class Orchestrator:
 
     def stop(self) -> None:
         """Shut down everything gracefully."""
-        self.cancel()
+        # Fence callbacks already admitted by the clipboard/hotkey threads
+        # before cancellation observes an idle session.
+        self.disable()
         self.clipboard_monitor.stop()
         if self._profile_executor is not None:
             self._profile_executor.shutdown(wait=False, cancel_futures=True)
