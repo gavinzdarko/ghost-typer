@@ -189,6 +189,11 @@ class TextParser:
 
         tag = node.name.lower() if node.name else ""
         fmt = dict(inherited_fmt)
+        if tag == "pre":
+            # PRE's own default overrides a parent's inherited pre-line mode.
+            # Its explicit inline white-space declaration is considered below.
+            fmt["preformatted"] = True
+            fmt["_white_space"] = "pre"
         visibility_hidden = bool(getattr(node, "_ghost_visibility_hidden", False))
 
         # Compute formatting from tag
@@ -458,7 +463,7 @@ class TextParser:
 
         # Merge adjacent text segments into larger plain-text chunks.
         merged: list[TextSegment] = []
-        inline_runs: list[tuple[str, list[str]]] = []
+        inline_runs: list[tuple[bool, list[str]]] = []
 
         def flush_inline() -> None:
             if inline_runs:
@@ -466,18 +471,18 @@ class TextParser:
                 # separate planner paragraphs. Normalize only collapsible runs,
                 # then join the whole inline region in linear work.
                 parts = []
-                for mode, values in inline_runs:
+                for preserve, values in inline_runs:
                     part = "".join(values)
-                    if mode == "pre-line":
+                    if not preserve:
                         part = re.sub(r" *\n *", "\n", re.sub(r"[ \t\f]+", " ", part))
-                    elif mode == "normal":
-                        part = re.sub(r" +", " ", part)
                     parts.append(part)
-                if inline_runs[0][0] != "pre":
+                if not inline_runs[0][0]:
                     parts[0] = parts[0].lstrip(" ")
-                if inline_runs[-1][0] != "pre":
+                if not inline_runs[-1][0]:
                     parts[-1] = parts[-1].rstrip(" ")
-                fmt = {"preformatted": True} if any(mode != "normal" for mode, _ in inline_runs) else {}
+                fmt = ({"preformatted": True}
+                       if any(preserve for preserve, _ in inline_runs) or any("\n" in part for part in parts)
+                       else {})
                 merged.append(TextSegment(text="".join(parts), formatting=fmt))
                 inline_runs.clear()
 
@@ -487,10 +492,12 @@ class TextParser:
                 flush_inline()
                 merged.append(seg)
                 continue
-            mode = (seg.formatting.get("_white_space", "pre")
-                    if seg.formatting.get("preformatted") else "normal")
-            if not inline_runs or inline_runs[-1][0] != mode:
-                inline_runs.append((mode, []))
+            # Normal and pre-line both collapse spaces, including at their
+            # shared inline boundary. Only true pre modes split those runs.
+            preserve = bool(seg.formatting.get("preformatted")
+                            and seg.formatting.get("_white_space") != "pre-line")
+            if not inline_runs or inline_runs[-1][0] != preserve:
+                inline_runs.append((preserve, []))
             inline_runs[-1][1].append(seg.text)
         flush_inline()
 

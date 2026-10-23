@@ -46,3 +46,17 @@ def test_pre_line_overrides_inherited_space_preservation_but_keeps_newlines():
     assert text('<div style="white-space:pre-wrap">a<span style="white-space:pre-line">  b</span>d</div>') == 'a bd'
     assert text('<div style="white-space:pre-line">  a  \n  b\t c  </div>') == 'a\nb c'
     assert text('<div style="white-space:pre-line"><span>a </span><span> b</span></div>') == 'a b'
+
+
+def test_collapsible_spaces_merge_across_pre_line_and_normal_boundaries():
+    assert text('<span style="white-space:pre-line">a </span> b') == 'a b'
+    assert text('<div style="white-space:pre-line">a <span style="white-space:normal"> b</span></div>') == 'a b'
+    assert text('<div style="white-space:pre-line">a\n<span style="white-space:normal"> b</span></div>') == 'a\nb'
+    # Actual pre spaces retain their separate preservation semantics.
+    assert text('<span style="white-space:pre">a </span> b') == 'a  b'
+
+
+def test_pre_block_resets_inherited_pre_line_without_collapsing_code():
+    source = '  x =  1\n  y =  2'
+    assert text(f'<div style="white-space:pre-line"><pre>{source}</pre></div>') == source
+    assert text(f'<pre style="white-space:pre-line">{source}</pre>') == 'x = 1\ny = 2'
