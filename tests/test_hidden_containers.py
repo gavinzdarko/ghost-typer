@@ -1,3 +1,5 @@
+import pytest
+
 from src.text_parser import TextParser
 
 
@@ -28,10 +30,29 @@ def test_content_visibility_hidden_hides_descendants_without_losing_block_bounda
 
 
 def test_content_visibility_uses_declaration_order_and_important():
-    assert text('<span style="content-visibility:hidden; content-visibility:visible">Visible</span>') == 'Visible'
-    assert text('<span style="content-visibility:hidden!important; content-visibility:visible">Hidden</span>') == ''
+    assert text('<div style="content-visibility:hidden; content-visibility:visible">Visible</div>') == 'Visible'
+    assert text('<div style="content-visibility:hidden!important; content-visibility:visible">Hidden</div>') == ''
 
 
 def test_nested_closed_details_do_not_expose_hidden_content():
     source = '<details open><summary>Outer</summary><details><summary>Inner</summary>Hidden</details></details>'
     assert text(source) == 'Outer\n\nInner'
+
+
+def test_content_visibility_does_not_hide_default_inline_text():
+    assert text('Before<span style="content-visibility:hidden">Visible</span>After') == 'BeforeVisibleAfter'
+
+
+@pytest.mark.parametrize('display', ['inline', 'contents', 'table', 'table-row', 'table-cell', 'ruby'])
+def test_content_visibility_does_not_hide_boxes_that_cannot_have_size_containment(display):
+    assert text(f'<div style="display:{display};content-visibility:hidden">Visible</div>') == 'Visible'
+
+
+@pytest.mark.parametrize('display', ['block', 'inline-block', 'inline flow-root', 'flex', 'grid'])
+def test_content_visibility_hides_containment_capable_inline_display_overrides(display):
+    assert text(f'<span style="display:{display};content-visibility:hidden">Hidden</span>') == ''
+
+
+def test_content_visibility_display_override_honors_important_and_inherit():
+    assert text('<span style="display:inline-block!important;display:inline;content-visibility:hidden">Hidden</span>') == ''
+    assert text('<div><span style="display:inherit;content-visibility:hidden">Hidden</span></div>') == ''

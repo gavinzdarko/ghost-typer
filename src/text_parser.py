@@ -102,7 +102,7 @@ class TextParser:
                 if declarations:
                     mode = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
                                   flags=re.IGNORECASE).strip().lower()
-                    if mode == "hidden":
+                    if mode == "hidden" and self._content_visibility_applies(tag):
                         # The container still creates its own block boundary.
                         tag.clear()
 
@@ -168,6 +168,34 @@ class TextParser:
             # text. A visible descendant does not restore its parent's marker.
             node._ghost_visibility_hidden = hidden
             stack.extend((child, hidden) for child in node.children)
+
+    @staticmethod
+    def _content_visibility_applies(node: Tag) -> bool:
+        """Recognize containment-capable boxes from HTML defaults/inline CSS.
+
+        Ordinary inline text and display:contents cannot skip their contents.
+        Unknown display modes stay visible rather than silently dropping text.
+        """
+        declarations = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)",
+                                  node.get("style", ""), re.IGNORECASE)
+        important = [value for value in declarations
+                     if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+        if declarations:
+            display = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
+                             flags=re.IGNORECASE).strip().lower()
+            display = " ".join(display.split())
+            if display == "inherit":
+                return isinstance(node.parent, Tag) and TextParser._content_visibility_applies(node.parent)
+            if display not in ("revert", "revert-layer"):
+                return display in {"block", "flow-root", "list-item", "flex", "grid",
+                                   "inline-block", "inline-flex", "inline-grid", "table-caption",
+                                   "block flow", "block flow-root", "block flex", "block grid",
+                                   "inline flow-root", "inline flex", "inline grid"}
+        return node.name in (TextParser.BLOCK_TAGS | TextParser.HEADING_TAGS | {
+            "body", "main", "aside", "address", "nav", "figure", "figcaption",
+            "pre", "details", "summary", "ul", "ol", "li", "menu", "dl", "dt", "dd",
+            "form", "fieldset", "legend", "dialog", "caption", "hr",
+        })
 
     @staticmethod
     def _is_hidden(node: Tag) -> bool:
