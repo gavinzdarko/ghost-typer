@@ -79,12 +79,33 @@ class TextParser:
         """
         soup = BeautifulSoup(html, "html.parser")
 
+        # Closed disclosure widgets render only their first direct summary.
+        # Select it before hidden elements are removed: a hidden first summary
+        # must not promote a later summary into the visible disclosure label.
+        for details in soup.find_all("details"):
+            if not details.has_attr("open"):
+                summary = details.find("summary", recursive=False)
+                for child in list(details.children):
+                    if child is not summary:
+                        child.extract()
+
         # Remove hidden subtrees before walking their descendants.
         # Decomposition also clears descendants'
         # attributes, so skip those entries in the original traversal snapshot.
         for tag in soup.find_all(True):
             if tag.attrs is not None and self._is_hidden(tag):
                 tag.decompose()
+            elif tag.attrs is not None:
+                declarations = re.findall(r"(?:^|;)\s*content-visibility\s*:\s*([^;]+)",
+                                          tag.get("style", ""), re.IGNORECASE)
+                important = [value for value in declarations
+                             if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+                if declarations:
+                    mode = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
+                                  flags=re.IGNORECASE).strip().lower()
+                    if mode == "hidden" and self._content_visibility_applies(tag):
+                        # The container still creates its own block boundary.
+                        tag.clear()
 
         # Strip tags that should always be removed
         for tag in soup.find_all(self.STRIP_TAGS):
@@ -148,6 +169,34 @@ class TextParser:
             # text. A visible descendant does not restore its parent's marker.
             node._ghost_visibility_hidden = hidden
             stack.extend((child, hidden) for child in node.children)
+
+    @staticmethod
+    def _content_visibility_applies(node: Tag) -> bool:
+        """Recognize containment-capable boxes from HTML defaults/inline CSS.
+
+        Ordinary inline text and display:contents cannot skip their contents.
+        Unknown display modes stay visible rather than silently dropping text.
+        """
+        declarations = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)",
+                                  node.get("style", ""), re.IGNORECASE)
+        important = [value for value in declarations
+                     if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+        if declarations:
+            display = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
+                             flags=re.IGNORECASE).strip().lower()
+            display = " ".join(display.split())
+            if display == "inherit":
+                return isinstance(node.parent, Tag) and TextParser._content_visibility_applies(node.parent)
+            if display not in ("revert", "revert-layer"):
+                return display in {"block", "flow-root", "list-item", "flex", "grid",
+                                   "inline-block", "inline-flex", "inline-grid", "table-caption",
+                                   "block flow", "block flow-root", "block flex", "block grid",
+                                   "inline flow-root", "inline flex", "inline grid"}
+        return node.name in (TextParser.BLOCK_TAGS | TextParser.HEADING_TAGS | {
+            "body", "main", "aside", "address", "nav", "figure", "figcaption",
+            "pre", "details", "summary", "ul", "ol", "li", "menu", "dl", "dt", "dd",
+            "form", "fieldset", "legend", "dialog", "caption", "hr",
+        })
 
     @staticmethod
     def _is_hidden(node: Tag) -> bool:
@@ -254,7 +303,7 @@ class TextParser:
             return
 
         # Paragraphs and block elements
-        if tag in self.BLOCK_TAGS or tag == "pre":
+        if tag in self.BLOCK_TAGS or tag in ("pre", "details", "summary"):
             align = node.get("align") or self._get_style_value(style, "text-align")
             if align:
                 fmt["alignment"] = align.strip().lower()
