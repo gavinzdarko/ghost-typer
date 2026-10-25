@@ -14,7 +14,9 @@ def test_cancel_after_draft_prevents_further_paid_requests_and_next_plan_recover
         stopped.set()
         return 'rough ' + text
     rewriter.generate_first_draft.side_effect = draft
-    planner = TypingPlanner(Settings(grammar_error_rate=0, punctuation_error_rate=0),
+    # Delayed typo corrections can consume the forced rewrite positions.
+    # Keep this scenario focused on cancelling immediately after a draft.
+    planner = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0, punctuation_error_rate=0),
                             ai_rewriter=rewriter, ai_enabled=False)
     planner._pick_rewrite_positions = lambda *_: [(4, 'word'), (12, 'word')]
     with pytest.raises(PlanningCancelled):
