@@ -637,26 +637,30 @@ class GhostTyperApp(rumps.App):
 
     def _start_animation(self) -> None:
         """Start animating the menu bar icon."""
-        if self._animation_thread is not None and self._animation_thread.is_alive():
+        if (self._animation_thread is not None and self._animation_thread.is_alive()
+                and not self._animation_stop.is_set()):
             return
-        self._animation_stop.clear()
-        self._animation_thread = threading.Thread(target=self._animate, daemon=True, name="MenuBarAnim")
+        # A stopped worker can still be exiting. Its event must stay set so it
+        # and its queued frames cannot become active again after a restart.
+        self._animation_stop = threading.Event()
+        self._animation_thread = threading.Thread(target=self._animate, args=(self._animation_stop,),
+                                                  daemon=True, name="MenuBarAnim")
         self._animation_thread.start()
 
     def _stop_animation(self) -> None:
         """Signal the animation thread to stop."""
         self._animation_stop.set()
 
-    def _animate(self) -> None:
+    def _animate(self, stop: threading.Event) -> None:
         """Cycle the menu bar icon to indicate typing activity."""
         frames = [ICON_TYPING, ICON_TYPING2, ICON_TYPING3]
         idx = 0
-        while not self._animation_stop.is_set():
+        while not stop.is_set():
             frame = frames[idx % len(frames)]
             # Check stop flag inside the lambda to avoid overwriting the icon
             # if _stop_animation() was called between enqueue and execution.
             self._queue_gui_update("animation", lambda f=frame: (
-                setattr(self, 'icon', f) if not self._animation_stop.is_set() else None
+                setattr(self, 'icon', f) if not stop.is_set() else None
             ))
             idx += 1
-            self._animation_stop.wait(timeout=0.5)
+            stop.wait(timeout=0.5)
