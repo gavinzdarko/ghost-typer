@@ -19,7 +19,8 @@ class TextParser:
     """Parses HTML or plain text into a list of TextSegment objects."""
 
     HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
-    BLOCK_TAGS = {"p", "div", "blockquote", "section", "article", "header", "footer"}
+    BLOCK_TAGS = {"p", "div", "blockquote", "section", "article", "header", "footer",
+                  "main", "aside", "address", "nav", "figure", "figcaption"}
     LIST_ITEM_TAG = "li"
     ORDERED_LIST_TAG = "ol"
     UNORDERED_LIST_TAG = "ul"
