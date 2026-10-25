@@ -259,7 +259,13 @@ class TextParser:
 
         # Line break
         if tag == "br":
-            segments.append(TextSegment(text="\n", formatting={"linebreak": True, "explicit_break_count": 1}))
+            if fmt.get("preformatted"):
+                # In a preserved run BR is content, just like a literal LF.
+                # Keep it separate from generated block boundaries so blank
+                # code lines survive next to a sibling paragraph.
+                segments.append(TextSegment(text="\n", formatting=dict(fmt)))
+            else:
+                segments.append(TextSegment(text="\n", formatting={"linebreak": True, "explicit_break_count": 1}))
             return
 
         # Horizontal rule

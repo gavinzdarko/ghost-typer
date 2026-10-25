@@ -29,3 +29,30 @@ def test_pre_normal_still_preserves_explicit_breaks_and_visible_descendants():
 
 def test_pre_default_keeps_inline_code_and_break_spacing():
     assert text('<pre>  a<b>  b</b><br>  c\t d</pre>') == "  a  b\n  c\t d"
+
+
+@pytest.mark.parametrize("source", [
+    '<pre>a{breaks}</pre><p>b</p>',
+    '<p>a</p><pre>{breaks}b</pre>',
+    '<pre>a{breaks}</pre><pre>b</pre>',
+])
+def test_pre_br_preserves_the_same_content_as_literal_newlines_at_block_edges(source):
+    assert text(source.format(breaks="<br><br>")) == text(source.format(breaks="\n\n")) == "a\n\n\n\nb"
+
+
+def test_pre_br_and_literal_newline_produce_the_same_planner_paragraph():
+    from unittest.mock import Mock
+    from src.models import Pause, Settings
+    from src.planned_text import PlannedText
+    from src.typing_planner import TypingPlanner
+
+    planner = TypingPlanner(Settings(error_rate=0, grammar_error_rate=0,
+        punctuation_error_rate=0, false_alarm_rate=0, pause_frequency=0,
+        rewrite_base_probability=0, rewrite_max_probability=0), ai_enabled=False)
+    planner.engine.paragraph_pause_duration = Mock(return_value=7)
+    segments = TextParser().parse('<pre>a<br>b</pre>', is_html=True)
+    assert len(segments) == 1
+    assert segments == TextParser().parse('<pre>a\nb</pre>', is_html=True)
+    plan = planner.plan(segments)
+    assert PlannedText().apply(plan.actions).text == "a\nb"
+    assert sum(isinstance(action, Pause) and action.duration == 7 for action in plan.actions) == 2
