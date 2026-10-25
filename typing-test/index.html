@@ -828,7 +828,7 @@ function buildConfigJSON() {
       error_rate: parseFloat(errorRate.toFixed(3)),
       correction_delay_chars_min: 0,
       correction_delay_chars_max: Math.min(maxCharsAfter, 6),
-      burst_length_min: Math.max(3, avgBurstLen - 3),
+      burst_length_min: Math.min(Math.max(3, avgBurstLen - 3), 30),
       burst_length_max: Math.min(maxBurstLen + 2, 30),
     },
     measured_data: {
