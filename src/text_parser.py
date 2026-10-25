@@ -78,8 +78,8 @@ class TextParser:
         """
         soup = BeautifulSoup(html, "html.parser")
 
-        # Remove hidden subtrees before any get_text() shortcut (notably PRE)
-        # can read their descendants. Decomposition also clears descendants'
+        # Remove hidden subtrees before walking their descendants.
+        # Decomposition also clears descendants'
         # attributes, so skip those entries in the original traversal snapshot.
         for tag in soup.find_all(True):
             if tag.attrs is not None and self._is_hidden(tag):
@@ -120,7 +120,7 @@ class TextParser:
         """Remove invisible text while allowing descendants to restore visibility.
 
         Unlike display:none, visibility:hidden is inherited and a child can
-        override it. Clean before PRE's get_text() shortcut reads descendants.
+        override it. Clean before the text walk reads descendants.
         """
         stack = [(root, False)]
         while stack:
@@ -246,7 +246,7 @@ class TextParser:
             return
 
         # Paragraphs and block elements
-        if tag in self.BLOCK_TAGS:
+        if tag in self.BLOCK_TAGS or tag == "pre":
             align = node.get("align") or self._get_style_value(style, "text-align")
             if align:
                 fmt["alignment"] = align.strip().lower()
@@ -259,7 +259,13 @@ class TextParser:
 
         # Line break
         if tag == "br":
-            segments.append(TextSegment(text="\n", formatting={"linebreak": True, "explicit_break_count": 1}))
+            if fmt.get("preformatted"):
+                # In a preserved run BR is content, just like a literal LF.
+                # Keep it separate from generated block boundaries so blank
+                # code lines survive next to a sibling paragraph.
+                segments.append(TextSegment(text="\n", formatting=dict(fmt)))
+            else:
+                segments.append(TextSegment(text="\n", formatting={"linebreak": True, "explicit_break_count": 1}))
             return
 
         # Horizontal rule
@@ -354,19 +360,6 @@ class TextParser:
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
             segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
-            return
-
-        # Pre-formatted / code block
-        if tag == "pre":
-            fmt["preformatted"] = True
-            # BR remains a rendered line break inside preformatted content;
-            # get_text() alone discards empty elements and joins both lines.
-            for br in node.find_all("br"):
-                br.replace_with("\n")
-            text = node.get_text()
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
-            segments.append(TextSegment(text=text, formatting=dict(fmt)))
-            segments.append(TextSegment(text="\n\n", formatting={"paragraph_break": True}))
             return
 
         # Default: recurse into children
