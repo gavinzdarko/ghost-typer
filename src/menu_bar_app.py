@@ -503,7 +503,19 @@ class GhostTyperApp(rumps.App):
             return
         # Menu delegates and menu actions run on AppKit's main thread. Apply
         # hotkey intent there too so menu dismissal cannot race ownership edits.
-        self._run_on_main(lambda: self._pause_resume(None))
+        with self.orchestrator._session_lock:
+            if self.orchestrator.state not in (OrchestratorState.TYPING, OrchestratorState.PAUSED):
+                return
+            simulator = self.orchestrator._simulator
+            if simulator is None:
+                return
+
+        def toggle_current_session():
+            with self.orchestrator._session_lock:
+                if self.orchestrator._simulator is simulator:
+                    self._pause_resume(None)
+
+        self._run_on_main(toggle_current_session)
 
     def _hotkey_emergency_stop(self) -> None:
         """Shift+F6 pressed — cancel current typing immediately."""

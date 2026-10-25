@@ -100,3 +100,30 @@ def test_delayed_hotkey_cannot_change_state_during_shutdown_or_settings(flag):
     setattr(app, flag, True)
     pending.pop()()
     assert app.orchestrator.state == OrchestratorState.TYPING
+
+
+@pytest.mark.parametrize('state', [OrchestratorState.IDLE, OrchestratorState.PLANNING])
+def test_f6_outside_active_typing_cannot_affect_a_later_session(state):
+    app = app_target()
+    app.orchestrator._state = state
+    pending = []
+    app._run_on_main = pending.append
+    toggle_method('_hotkey_toggle_pause')(app)
+    assert pending == []
+
+
+@pytest.mark.parametrize('state', [OrchestratorState.TYPING, OrchestratorState.PAUSED])
+def test_delayed_f6_from_an_ended_session_cannot_toggle_a_new_simulator(state):
+    app = app_target()
+    app.orchestrator._state = state
+    app.orchestrator._simulator = Mock()
+    app._pause_resume = lambda sender: toggle_method()(app, sender)
+    pending = []
+    app._run_on_main = pending.append
+    toggle_method('_hotkey_toggle_pause')(app)
+    app.orchestrator._state = OrchestratorState.TYPING
+    app.orchestrator._simulator = Mock()
+    pending.pop()()
+    assert app.orchestrator.state == OrchestratorState.TYPING
+    app.orchestrator._simulator.pause.assert_not_called()
+    app.orchestrator._simulator.resume.assert_not_called()
