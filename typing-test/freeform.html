@@ -104,6 +104,11 @@ let prevChar = '', currentBurst = [], timerInterval = null;
 
 const area = document.getElementById('typing-area');
 
+// Pasted/dropped text has no keystroke timings and would inflate measured WPM.
+for (const event of ['paste', 'drop']) {
+  area.addEventListener(event, e => e.preventDefault());
+}
+
 area.addEventListener('keydown', e => {
   if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
   if (e.key.length !== 1 && e.key !== 'Backspace' && e.key !== 'Enter') return;
