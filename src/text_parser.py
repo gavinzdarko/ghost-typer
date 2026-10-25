@@ -231,6 +231,13 @@ class TextParser:
             elif mode == "pre-line":
                 fmt["preformatted"] = True
                 fmt["_white_space"] = "pre-line"
+            elif mode in ("inherit", "unset"):
+                # Explicit inheritance overrides PRE's element default too.
+                for key in ("preformatted", "_white_space"):
+                    if key in inherited_fmt:
+                        fmt[key] = inherited_fmt[key]
+                    else:
+                        fmt.pop(key, None)
             elif mode in ("normal", "nowrap", "initial"):
                 fmt.pop("preformatted", None)
                 fmt.pop("_white_space", None)

@@ -12,6 +12,22 @@ def test_pre_inline_mode_can_restore_normal_whitespace(mode):
     assert text(f'<pre style="white-space:{mode}">a  b\n c\td</pre>') == "a b c d"
 
 
+@pytest.mark.parametrize("keyword", ["inherit", "unset"])
+@pytest.mark.parametrize("parent_mode,expected", [
+    ("normal", "a b c"),
+    ("pre-line", "a b\nc"),
+    ("pre-wrap", "a  b\n c"),
+])
+def test_pre_explicit_inheritance_uses_parent_whitespace_mode(keyword, parent_mode, expected):
+    source = f'<div style="white-space:{parent_mode}"><pre style="white-space:{keyword}">a  b\n c</pre></div>'
+    assert text(source) == expected
+
+
+@pytest.mark.parametrize("keyword", ["inherit", "unset"])
+def test_pre_explicit_inheritance_uses_normal_mode_when_parent_has_no_style(keyword):
+    assert text(f'<pre style="white-space:{keyword}">a  b\n c</pre>') == "a b c"
+
+
 def test_pre_descendants_can_override_whitespace_without_losing_outer_spacing():
     source = '<pre>  a<span style="white-space:normal">  b\n c</span>  d\n e</pre>'
     assert text(source) == "  a b c  d\n e"
