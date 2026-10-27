@@ -83,10 +83,10 @@ Configurable from the menu bar:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| WPM | 65 | Base typing speed |
-| Error Rate | 4% | How often typos occur |
+| WPM | 60 | Base typing speed |
+| Error Rate | 12% | How often typos occur |
 | Start Delay | 3.0s | Delay before typing begins |
-| Pause Frequency | 8% | How often natural pauses happen |
+| Pause Frequency | 15% | How often natural pauses happen |
 | Fatigue | On | Gradual slowdown over time |
 | Burst Typing | On | Speed variation within words |
 | AI Planning | On | AI-generated typing profiles |
