@@ -202,13 +202,16 @@ class TextParser:
     def _is_hidden(node: Tag) -> bool:
         if node.has_attr("hidden"):
             return True
+        closed_dialog = node.name == "dialog" and not node.has_attr("open")
         # Respect declaration order and !important for inline display styles.
         displays = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)", node.get("style", ""), re.IGNORECASE)
         important = [value for value in displays if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
         if not displays:
-            return False
+            return closed_dialog
         display = (important or displays)[-1]
         display = re.sub(r"!\s*important\s*$", "", display, flags=re.IGNORECASE).strip().lower()
+        if display in ("revert", "revert-layer"):
+            return closed_dialog
         return display == "none"
 
     def _walk_node(
