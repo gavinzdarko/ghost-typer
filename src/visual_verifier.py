@@ -86,14 +86,23 @@ class VisualVerifier:
             return None
 
         try:
-            global cv2, np, pytesseract, Image
+            global HAS_OPENCV, cv2, np, pytesseract, Image
             if Image is None:
                 from PIL import Image
             if pytesseract is None:
                 import pytesseract
-            if HAS_OPENCV and cv2 is None:
-                import cv2
-                import numpy as np
+            if HAS_OPENCV and (cv2 is None or np is None):
+                try:
+                    import cv2
+                    import numpy as np
+                except Exception:
+                    # Discovery does not guarantee native extensions can load
+                    # (for example, an incompatible NumPy ABI). Preprocessing
+                    # is optional: keep basic Pillow/Tesseract OCR available,
+                    # and do not retry a broken import on every verification.
+                    HAS_OPENCV = False
+                    cv2 = np = None
+                    logger.warning("OpenCV unavailable; using basic OCR", exc_info=True)
             with Image.open(image_path) as source:
                 if HAS_OPENCV:
                     img_array = np.array(source.convert("RGB"))
