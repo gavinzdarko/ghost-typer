@@ -20,7 +20,8 @@ class TextParser:
 
     HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
     BLOCK_TAGS = {"p", "div", "blockquote", "section", "article", "header", "footer",
-                  "main", "aside", "address", "nav", "figure", "figcaption"}
+                  "main", "aside", "address", "nav", "figure", "figcaption",
+                  "form", "search", "fieldset", "legend", "dialog", "hgroup"}
     LIST_ITEM_TAG = "li"
     ORDERED_LIST_TAG = "ol"
     UNORDERED_LIST_TAG = "ul"
