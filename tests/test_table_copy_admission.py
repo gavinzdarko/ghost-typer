@@ -28,7 +28,8 @@ def test_table_copy_waiting_for_admission_survives_mode_exit(exit_mode):
         assert release.wait(2), 'table copy was not released'
         return add(content)
 
-    target._add_to_table_queue = delayed_add
+    monitor._on_immediate_change = delayed_add
+    monitor._on_change = Mock(side_effect=target._on_clipboard_change)
     with pasteboard_patch(pb):
         worker = Thread(target=monitor._capture_change)
         worker.start()
@@ -50,6 +51,7 @@ def test_table_copy_waiting_for_admission_survives_mode_exit(exit_mode):
     assert not monitor._immediate_mode
     target.on_table_queue_change.assert_called_once_with(0)
     assert target._launch_pipeline.call_count == (exit_mode == 'run')
+    monitor._on_change.assert_not_called()
 
 
 def test_table_queue_rejects_a_copy_when_mode_is_inactive():

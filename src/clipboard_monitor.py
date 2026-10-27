@@ -57,8 +57,11 @@ class ClipboardMonitor:
         self,
         on_clipboard_change: Callable[[ClipboardContent], bool | None],
         start_delay: float = 3.0,
+        *,
+        on_immediate_change: Optional[Callable[[ClipboardContent], bool | None]] = None,
     ):
         self._on_change = on_clipboard_change
+        self._on_immediate_change = on_immediate_change
         self.start_delay = start_delay
         self._enabled = False
         self._clipboard_lock = threading.RLock()
@@ -200,7 +203,10 @@ class ClipboardMonitor:
         logger.info("Clipboard captured: %s, %d characters", "HTML" if content.is_html else "plain text", len(content.text))
         if self._immediate_mode:
             try:
-                accepted = self._on_change(content) is not False
+                # Preserve the capture's table-only intent even if table mode
+                # exits before callback entry. Never reinterpret it as Cmd+V.
+                callback = self._on_immediate_change or self._on_change
+                accepted = callback(content) is not False
             except Exception:
                 logger.exception("Error in clipboard change callback")
                 return

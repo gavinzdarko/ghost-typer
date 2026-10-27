@@ -75,6 +75,7 @@ class Orchestrator:
         )
         self.clipboard_monitor = ClipboardMonitor(
             on_clipboard_change=self._on_clipboard_change,
+            on_immediate_change=self._add_to_table_queue,
             start_delay=self._settings_dict.get("start_delay", 3.0),
         )
 
