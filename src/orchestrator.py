@@ -75,6 +75,7 @@ class Orchestrator:
         )
         self.clipboard_monitor = ClipboardMonitor(
             on_clipboard_change=self._on_clipboard_change,
+            on_immediate_change=self._add_to_table_queue,
             start_delay=self._settings_dict.get("start_delay", 3.0),
         )
 
@@ -285,16 +286,17 @@ class Orchestrator:
 
     def enable_table_fill(self) -> None:
         """Enter table fill mode — pastes queue up instead of typing."""
-        self._table_fill_mode = True
-        self.clipboard_monitor._immediate_mode = True
+        with self._table_queue_lock:
+            self._table_fill_mode = True
+            self.clipboard_monitor._immediate_mode = True
         self._notify_table_queue_change(self.table_queue_count())
         logger.info("Table fill mode ON")
 
     def disable_table_fill(self) -> None:
         """Exit table fill mode and clear the queue."""
-        self._table_fill_mode = False
-        self.clipboard_monitor._immediate_mode = False
         with self._table_queue_lock:
+            self._table_fill_mode = False
+            self.clipboard_monitor._immediate_mode = False
             self._table_queue.clear()
         self._notify_table_queue_change(0)
         logger.info("Table fill mode OFF")
@@ -303,7 +305,7 @@ class Orchestrator:
         with self._table_queue_lock:
             return sum(1 for item in self._table_queue if item.text != _ROW_BREAK)
 
-    def _add_to_table_queue(self, content: ClipboardContent) -> None:
+    def _add_to_table_queue(self, content: ClipboardContent) -> bool:
         """Add clipboard content to the table fill queue.
 
         Supports two formats:
@@ -319,6 +321,11 @@ class Orchestrator:
 
         items_added = 0
         with self._table_queue_lock:
+            # A monitor callback may have observed table mode before the user
+            # disabled it or started the queued run. Reject that late copy so
+            # the monitor retains the clipboard instead of consuming it.
+            if not self._table_fill_mode:
+                return False
             if has_row_breaks:
                 # Split into row groups by blank lines.
                 # Insert a ROW_BREAK between groups (not for leading/trailing
@@ -348,6 +355,7 @@ class Orchestrator:
             count = sum(1 for item in self._table_queue if item.text != _ROW_BREAK)
         logger.info("Table queue: added %d cell(s), total %d", items_added, count)
         self._notify_table_queue_change(count)
+        return True
 
     def _notify_table_queue_change(self, count: int) -> None:
         cb = self.on_table_queue_change
@@ -629,8 +637,7 @@ class Orchestrator:
         """Callback from clipboard monitor when new content is detected."""
         # Table fill mode: queue instead of typing
         if self._table_fill_mode:
-            self._add_to_table_queue(content)
-            return True
+            return self._add_to_table_queue(content)
 
         return self._launch_pipeline(self._typing_pipeline, (content,), "TypingPipeline")
 
