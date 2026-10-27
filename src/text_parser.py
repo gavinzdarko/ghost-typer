@@ -270,7 +270,8 @@ class TextParser:
             return default_inline
         return "inline" in display.split() or display in {"inline", "inline-block", "inline-flex", "inline-grid",
                            "inline-table", "contents", "initial", "unset", "inline flow",
-                           "inline flow-root", "inline flex", "inline grid", "inline table", "ruby"}
+                           "inline flow-root", "inline flex", "inline grid", "inline table", "ruby",
+                           "ruby-base", "ruby-text", "ruby-base-container", "ruby-text-container"}
 
     def _walk_node(
         self,

@@ -9,7 +9,8 @@ def text(source):
 
 @pytest.mark.parametrize('display', ['inline', 'inline-block', 'inline-flex', 'inline-grid',
                                    'inline-table', 'contents', 'initial', 'unset', 'inline flow',
-                                   'ruby', 'inline ruby', 'inline list-item', 'list-item inline flow-root'])
+                                   'ruby', 'inline ruby', 'inline list-item', 'list-item inline flow-root',
+                                   'ruby-base', 'ruby-text', 'ruby-base-container', 'ruby-text-container'])
 def test_inline_paragraphs_do_not_insert_enter_keys(display):
     assert text(f'<p style="display:{display}">A</p><p style="display:{display}">B</p>') == 'AB'
 
@@ -46,3 +47,8 @@ def test_inline_tags_with_block_display_separate_neighboring_words(tag, display)
 def test_invalid_display_does_not_override_a_valid_inline_declaration():
     assert text('A<p style="display:inline;display:bogus!important">B</p>C') == 'ABC'
     assert text('A<span style="display:bogus">B</span>C') == 'ABC'
+
+
+@pytest.mark.parametrize('display', ['ruby-base', 'ruby-text', 'ruby-base-container', 'ruby-text-container'])
+def test_internal_ruby_boxes_do_not_create_outer_paragraph_breaks(display):
+    assert text(f'A<span style="display:{display}">C</span>B') == 'ACB'
