@@ -177,20 +177,22 @@ class TextParser:
         Ordinary inline text and display:contents cannot skip their contents.
         Unknown display modes stay visible rather than silently dropping text.
         """
-        declarations = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)",
-                                  node.get("style", ""), re.IGNORECASE)
-        important = [value for value in declarations
-                     if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
-        if declarations:
-            display = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
-                             flags=re.IGNORECASE).strip().lower()
-            display = " ".join(display.split())
+        display = TextParser._inline_display(node)
+        if display is not None:
             if display == "inherit":
                 return isinstance(node.parent, Tag) and TextParser._content_visibility_applies(node.parent)
             if display not in ("revert", "revert-layer"):
+                # Multi-keyword display accepts either token order. Normalize
+                # the outer/inner roles before testing containment capability.
+                tokens = set(display.split())
+                if len(tokens) > 1:
+                    outer = next((role for role in ("inline", "block", "run-in") if role in tokens), "block")
+                    inner = next((role for role in ("flow-root", "flow", "flex", "grid", "table", "ruby")
+                                  if role in tokens), "flow")
+                    display = f"{outer} {inner}"
                 return display in {"block", "flow-root", "list-item", "flex", "grid",
                                    "inline-block", "inline-flex", "inline-grid", "table-caption",
-                                   "block flow", "block flow-root", "block flex", "block grid",
+                                   "flow", "block flow", "block flow-root", "block flex", "block grid",
                                    "inline flow-root", "inline flex", "inline grid"}
         return node.name in (TextParser.BLOCK_TAGS | TextParser.HEADING_TAGS | {
             "body", "main", "aside", "address", "nav", "figure", "figcaption",
@@ -199,16 +201,52 @@ class TextParser:
         })
 
     @staticmethod
+    def _inline_display(node: Tag) -> Optional[str]:
+        """Select a valid literal display declaration using inline precedence.
+
+        External stylesheets, variables and browser layout are outside this
+        parser's model. Invalid literals must not reveal default-hidden text.
+        """
+        declarations = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)", node.get("style", ""), re.IGNORECASE)
+        if not declarations:
+            return None
+        outer = {"block", "inline", "run-in"}
+        inner = {"flow", "flow-root", "table", "flex", "grid", "ruby"}
+        singles = outer | inner | {
+            "list-item", "none", "contents", "inline-block", "inline-table", "inline-flex", "inline-grid",
+            "table-row-group", "table-header-group", "table-footer-group", "table-row", "table-cell",
+            "table-column-group", "table-column", "table-caption", "ruby-base", "ruby-text",
+            "ruby-base-container", "ruby-text-container", "inherit", "initial", "unset", "revert", "revert-layer",
+        }
+        valid = []
+        for raw in declarations:
+            important = bool(re.search(r"!\s*important\s*$", raw, re.IGNORECASE))
+            value = " ".join(re.sub(r"!\s*important\s*$", "", raw, flags=re.IGNORECASE).lower().split())
+            words = value.split()
+            tokens = set(words)
+            if value in singles:
+                allowed = True
+            elif "list-item" in tokens:
+                allowed = (len(tokens) == len(words) and tokens <= outer | {"flow", "flow-root", "list-item"}
+                           and len(tokens & outer) <= 1 and len(tokens & {"flow", "flow-root"}) <= 1)
+            else:
+                allowed = (len(words) == 2 and len(tokens & outer) == 1 and len(tokens & inner) == 1)
+            if allowed:
+                valid.append((important, value))
+        if not valid:
+            return None
+        return max(enumerate(valid), key=lambda item: (item[1][0], item[0]))[1][1]
+
+    @staticmethod
     def _is_hidden(node: Tag) -> bool:
         if node.has_attr("hidden"):
             return True
-        # Respect declaration order and !important for inline display styles.
-        displays = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)", node.get("style", ""), re.IGNORECASE)
-        important = [value for value in displays if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
-        if not displays:
-            return False
-        display = (important or displays)[-1]
-        display = re.sub(r"!\s*important\s*$", "", display, flags=re.IGNORECASE).strip().lower()
+        closed_dialog = node.name == "dialog" and not node.has_attr("open")
+        display = TextParser._inline_display(node)
+        if display is None:
+            return closed_dialog
+        if display in ("revert", "revert-layer"):
+            return closed_dialog
         return display == "none"
 
     def _walk_node(
