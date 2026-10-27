@@ -211,6 +211,35 @@ class TextParser:
         display = re.sub(r"!\s*important\s*$", "", display, flags=re.IGNORECASE).strip().lower()
         return display == "none"
 
+    @staticmethod
+    def _has_inline_outer_display(node: Tag) -> bool:
+        """Honor inline display overrides on otherwise block containers.
+
+        This only determines generated outer separators; descendants retain
+        their own layout and whitespace behavior.
+        """
+        default_inline = node.name not in (TextParser.BLOCK_TAGS | TextParser.HEADING_TAGS | {
+            "html", "body", "pre", "details", "summary", "ul", "ol", "li",
+            "menu", "dl", "dt", "dd", "table", "tr", "td", "th", "caption",
+            "form", "fieldset", "legend", "dialog", "search", "hgroup",
+        })
+        declarations = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)",
+                                  node.get("style", ""), re.IGNORECASE)
+        important = [value for value in declarations
+                     if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
+        if not declarations:
+            return default_inline
+        display = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
+                         flags=re.IGNORECASE).strip().lower()
+        display = " ".join(display.split())
+        if display == "inherit" and isinstance(node.parent, Tag):
+            return TextParser._has_inline_outer_display(node.parent)
+        if display in ("revert", "revert-layer"):
+            return default_inline
+        return display in {"inline", "inline-block", "inline-flex", "inline-grid",
+                           "inline-table", "contents", "initial", "unset", "inline flow",
+                           "inline flow-root", "inline flex", "inline grid", "inline table"}
+
     def _walk_node(
         self,
         node: Tag | NavigableString,
@@ -293,7 +322,9 @@ class TextParser:
                 fmt.pop("_white_space", None)
 
         # Headings
-        if tag in self.HEADING_TAGS:
+        is_container = tag in self.HEADING_TAGS or tag in self.BLOCK_TAGS or tag in ("pre", "details", "summary")
+        inline_container = is_container and self._has_inline_outer_display(node)
+        if tag in self.HEADING_TAGS and not inline_container:
             fmt["heading_level"] = int(tag[1])
             fmt["bold"] = True
             segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
@@ -303,7 +334,7 @@ class TextParser:
             return
 
         # Paragraphs and block elements
-        if tag in self.BLOCK_TAGS or tag in ("pre", "details", "summary"):
+        if (tag in self.BLOCK_TAGS or tag in ("pre", "details", "summary")) and not inline_container:
             align = node.get("align") or self._get_style_value(style, "text-align")
             if align:
                 fmt["alignment"] = align.strip().lower()
