@@ -199,17 +199,47 @@ class TextParser:
         })
 
     @staticmethod
+    def _inline_display(node: Tag) -> Optional[str]:
+        """Select a valid literal display declaration using inline precedence.
+
+        External stylesheets, variables and browser layout are outside this
+        parser's model. Invalid literals must not reveal default-hidden text.
+        """
+        outer = {"block", "inline", "run-in"}
+        inner = {"flow", "flow-root", "table", "flex", "grid", "ruby"}
+        singles = outer | inner | {
+            "list-item", "none", "contents", "inline-block", "inline-table", "inline-flex", "inline-grid",
+            "table-row-group", "table-header-group", "table-footer-group", "table-row", "table-cell",
+            "table-column-group", "table-column", "table-caption", "ruby-base", "ruby-text",
+            "ruby-base-container", "ruby-text-container", "inherit", "initial", "unset", "revert", "revert-layer",
+        }
+        valid = []
+        for raw in re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)", node.get("style", ""), re.IGNORECASE):
+            important = bool(re.search(r"!\s*important\s*$", raw, re.IGNORECASE))
+            value = " ".join(re.sub(r"!\s*important\s*$", "", raw, flags=re.IGNORECASE).lower().split())
+            words = value.split()
+            tokens = set(words)
+            if value in singles:
+                allowed = True
+            elif "list-item" in tokens:
+                allowed = (len(tokens) == len(words) and tokens <= outer | {"flow", "flow-root", "list-item"}
+                           and len(tokens & outer) <= 1 and len(tokens & {"flow", "flow-root"}) <= 1)
+            else:
+                allowed = (len(words) == 2 and len(tokens & outer) == 1 and len(tokens & inner) == 1)
+            if allowed:
+                valid.append((important, value))
+        if not valid:
+            return None
+        return max(enumerate(valid), key=lambda item: (item[1][0], item[0]))[1][1]
+
+    @staticmethod
     def _is_hidden(node: Tag) -> bool:
         if node.has_attr("hidden"):
             return True
         closed_dialog = node.name == "dialog" and not node.has_attr("open")
-        # Respect declaration order and !important for inline display styles.
-        displays = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)", node.get("style", ""), re.IGNORECASE)
-        important = [value for value in displays if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
-        if not displays:
+        display = TextParser._inline_display(node)
+        if display is None:
             return closed_dialog
-        display = (important or displays)[-1]
-        display = re.sub(r"!\s*important\s*$", "", display, flags=re.IGNORECASE).strip().lower()
         if display in ("revert", "revert-layer"):
             return closed_dialog
         return display == "none"

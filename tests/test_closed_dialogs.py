@@ -28,3 +28,15 @@ def test_inline_display_can_reveal_a_closed_dialog():
 def test_reverted_dialog_display_restores_its_html_default(display):
     assert text(f'<dialog style="display:{display}">Hidden</dialog>') == ''
     assert text(f'<dialog open style="display:{display}">Visible</dialog>') == 'Visible'
+
+
+@pytest.mark.parametrize('style', ['display:bogus', 'display:none;display:bogus',
+                                  'display:bogus!important', 'display:table bogus',
+                                  'display:block inline', 'display:inline ruby list-item'])
+def test_invalid_display_cannot_reveal_closed_dialog_text(style):
+    assert text(f'Before<dialog style="{style}">Hidden</dialog>After') == 'BeforeAfter'
+
+
+def test_invalid_important_declaration_does_not_override_valid_display():
+    assert text('<dialog style="display:block;display:bogus!important">Visible</dialog>') == 'Visible'
+    assert text('<dialog open style="display:none;display:bogus!important">Hidden</dialog>') == ''
