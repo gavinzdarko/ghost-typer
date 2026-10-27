@@ -17,7 +17,13 @@ const elements = new Map();
 function element(id) {
   if (!elements.has(id)) elements.set(id, {
     value: '', style: {}, innerHTML: '', textContent: '', readOnly: false,
-    classList: {add() {}, remove() {}, toggle() {}},
+    classList: {
+      values: new Set(),
+      add(value) { this.values.add(value); },
+      remove(value) { this.values.delete(value); },
+      contains(value) { return this.values.has(value); },
+      toggle() {},
+    },
     listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; },
     focus() {}, scrollIntoView() {}, getContext() {return new Proxy({}, {get: () => () => {}});},
   });
@@ -106,4 +112,30 @@ assert.deepEqual(buildConfigJSON(), snapshot);
 startNewRound();
 assert.equal(started, false);
 assert.equal(finishTime, null);
+""")
+
+
+def test_prompt_summary_charts_measure_visible_layout_on_each_round():
+    run("index.html", """
+const summary = element('summary');
+for (const id of ['iki-chart', 'fatigue-chart']) {
+  // A display:none ancestor gives descendants zero layout width. Model that
+  // browser contract so drawing before revealing the summary cannot pass.
+  Object.defineProperty(element(id), 'offsetWidth', {
+    get() { return summary.classList.contains('visible') ? 400 : 0; },
+  });
+}
+for (let round = 0; round < 2; round++) {
+  startNewRound();
+  assert.equal(summary.classList.contains('visible'), false);
+  key('typing-input', 'a', 100);
+  key('typing-input', 'b', 200);
+  wpmOverTime.push({time: 5, wpm: 60, errorRate: 0},
+                   {time: 10, wpm: 62, errorRate: 0});
+  now = 11100;
+  finish();
+  assert.equal(summary.classList.contains('visible'), true);
+  assert.equal(element('iki-chart').width, 800);
+  assert.equal(element('fatigue-chart').width, 800);
+}
 """)
