@@ -256,22 +256,16 @@ class TextParser:
             "menu", "dl", "dt", "dd", "table", "tr", "td", "th", "caption",
             "form", "fieldset", "legend", "dialog", "search", "hgroup",
         })
-        declarations = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)",
-                                  node.get("style", ""), re.IGNORECASE)
-        important = [value for value in declarations
-                     if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
-        if not declarations:
+        display = TextParser._inline_display(node)
+        if display is None:
             return default_inline
-        display = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
-                         flags=re.IGNORECASE).strip().lower()
-        display = " ".join(display.split())
         if display == "inherit" and isinstance(node.parent, Tag):
             return TextParser._has_inline_outer_display(node.parent)
         if display in ("revert", "revert-layer"):
             return default_inline
-        return display in {"inline", "inline-block", "inline-flex", "inline-grid",
+        return "inline" in display.split() or display in {"inline", "inline-block", "inline-flex", "inline-grid",
                            "inline-table", "contents", "initial", "unset", "inline flow",
-                           "inline flow-root", "inline flex", "inline grid", "inline table"}
+                           "inline flow-root", "inline flex", "inline grid", "inline table", "ruby"}
 
     def _walk_node(
         self,
@@ -355,8 +349,13 @@ class TextParser:
                 fmt.pop("_white_space", None)
 
         # Headings
-        is_container = tag in self.HEADING_TAGS or tag in self.BLOCK_TAGS or tag in ("pre", "details", "summary")
-        inline_container = is_container and self._has_inline_outer_display(node)
+        inline_container = self._has_inline_outer_display(node)
+        # Keep specialized list/table/linebreak handling below. Ordinary inline
+        # tags can acquire a block outer box through an explicit display style.
+        css_block = (not inline_container and tag not in {
+            "html", "body", "[document]", "br", "hr", "ol", "ul", "li", "dl", "dt", "dd",
+            "table", "thead", "tbody", "tfoot", "tr", "td", "th", "col", "colgroup", "caption",
+        })
         if tag in self.HEADING_TAGS and not inline_container:
             fmt["heading_level"] = int(tag[1])
             fmt["bold"] = True
@@ -367,7 +366,7 @@ class TextParser:
             return
 
         # Paragraphs and block elements
-        if (tag in self.BLOCK_TAGS or tag in ("pre", "details", "summary")) and not inline_container:
+        if css_block:
             align = node.get("align") or self._get_style_value(style, "text-align")
             if align:
                 fmt["alignment"] = align.strip().lower()

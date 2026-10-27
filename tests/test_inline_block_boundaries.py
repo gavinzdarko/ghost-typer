@@ -8,7 +8,8 @@ def text(source):
 
 
 @pytest.mark.parametrize('display', ['inline', 'inline-block', 'inline-flex', 'inline-grid',
-                                   'inline-table', 'contents', 'initial', 'unset', 'inline flow'])
+                                   'inline-table', 'contents', 'initial', 'unset', 'inline flow',
+                                   'ruby', 'inline ruby', 'inline list-item', 'list-item inline flow-root'])
 def test_inline_paragraphs_do_not_insert_enter_keys(display):
     assert text(f'<p style="display:{display}">A</p><p style="display:{display}">B</p>') == 'AB'
 
@@ -34,3 +35,14 @@ def test_display_precedence_and_inheritance_preserve_the_selected_layout():
 @pytest.mark.parametrize('display', ['revert', 'revert-layer', 'block'])
 def test_block_defaults_remain_for_block_display_and_reverts(display):
     assert text(f'Before<p style="display:{display}">Middle</p>After') == 'Before\nMiddle\n\nAfter'
+
+
+@pytest.mark.parametrize('tag', ['span', 'strong', 'a'])
+@pytest.mark.parametrize('display', ['block', 'flow-root', 'flex', 'grid', 'block flow', 'flex block'])
+def test_inline_tags_with_block_display_separate_neighboring_words(tag, display):
+    assert text(f'Before<{tag} style="display:{display}">Middle</{tag}>After') == 'Before\nMiddle\n\nAfter'
+
+
+def test_invalid_display_does_not_override_a_valid_inline_declaration():
+    assert text('A<p style="display:inline;display:bogus!important">B</p>C') == 'ABC'
+    assert text('A<span style="display:bogus">B</span>C') == 'ABC'
