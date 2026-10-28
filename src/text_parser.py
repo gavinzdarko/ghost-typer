@@ -473,13 +473,13 @@ class TextParser:
                 fmt["list_type"] = "bulleted"
 
             if not inline_container:
-                segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             if not visibility_hidden and self._has_list_marker(node):
                 segments.append(TextSegment(text=prefix, formatting=dict(fmt, list_prefix=True)))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
             if not inline_container:
-                segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             return
 
         # Table elements

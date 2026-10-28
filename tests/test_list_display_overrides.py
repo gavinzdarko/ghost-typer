@@ -20,6 +20,17 @@ def test_list_container_contents_keeps_default_child_list_item_boxes():
     assert text('before<ol style="display:contents"><li>one</li><li>two</li></ol>after') == "before\n1. one\n2. two\nafter"
 
 
+@pytest.mark.parametrize("display", ["contents", "inline", "inline-block"])
+def test_generated_item_boundaries_do_not_add_enters_at_document_edges(display):
+    assert text(f'<ul style="display:{display}"><li>one</li><li>two</li></ul>') == "- one\n- two"
+    assert text(f'<ol style="display:{display}"><li>one</li></ol>') == "1. one"
+    assert text(f'<ul style="display:{display}"><li>one<br></li></ul>') == "- one\n"
+
+
+def test_standalone_item_has_no_generated_edge_newlines():
+    assert text('<li>one</li>') == "- one"
+
+
 @pytest.mark.parametrize("display", ["block", "flow-root", "flex", "grid"])
 def test_block_item_override_keeps_boundaries_without_a_list_marker(display):
     assert text(f'before<ul><li style="display:{display}">one</li></ul>after') == "before\none\nafter"
