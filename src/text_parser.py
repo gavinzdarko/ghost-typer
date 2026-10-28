@@ -162,6 +162,55 @@ class TextParser:
             stack.extend((child, hidden) for child in node.children)
 
     @staticmethod
+    def _inline_values(style: str, prop: str):
+        """Read declarations without treating comments/strings as CSS rules.
+
+        Comments separate tokens rather than joining identifiers. Quoted and
+        grouped values retain their delimiters, so a literal-looking rule
+        inside content, a URL or a custom property cannot change visibility.
+        """
+        parts = []
+        quote = None
+        closing = []
+        pairs = {"(": ")", "[": "]", "{": "}"}
+        index = 0
+        while index < len(style):
+            char = style[index]
+            if char == "\\":
+                parts.append(style[index:index + 2])
+                index += 2
+                continue
+            if quote is not None:
+                parts.append(char)
+                if char == quote or char in "\n\r\f":
+                    quote = None
+            elif char in ("'", '"'):
+                quote = char
+                parts.append(char)
+            elif style.startswith("/*", index):
+                end = style.find("*/", index + 2)
+                parts.append(" ")
+                index = len(style) if end < 0 else end + 2
+                continue
+            elif char in pairs:
+                closing.append(pairs[char])
+                parts.append(char)
+            elif closing and char == closing[-1]:
+                closing.pop()
+                parts.append(char)
+            elif char == ";" and not closing:
+                declaration = "".join(parts).partition(":")
+                if declaration[0].strip().lower() == prop:
+                    yield declaration[2]
+                parts.clear()
+            else:
+                parts.append(char)
+            index += 1
+        declaration = "".join(parts).partition(":")
+        if declaration[0].strip().lower() == prop:
+            yield declaration[2]
+
+    @staticmethod
     def _inline_keyword(style: str, prop: str, keywords: set[str]) -> Optional[str]:
         """Choose literal values after validation, before priority/order.
 
@@ -171,8 +220,7 @@ class TextParser:
         """
         globals_ = {"inherit", "initial", "unset", "revert", "revert-layer"}
         candidates = []
-        for raw in re.findall(r"(?:^|;)\s*" + re.escape(prop) + r"\s*:\s*([^;]+)",
-                              style, re.IGNORECASE):
+        for raw in TextParser._inline_values(style, prop):
             important = bool(re.search(r"!\s*important\s*$", raw, re.IGNORECASE))
             value = " ".join(re.sub(r"!\s*important\s*$", "", raw, flags=re.IGNORECASE).lower().split())
             valid = value in keywords | globals_
@@ -229,9 +277,7 @@ class TextParser:
         External stylesheets, variables and browser layout are outside this
         parser's model. Invalid literals must not reveal default-hidden text.
         """
-        declarations = re.findall(r"(?:^|;)\s*display\s*:\s*([^;]+)", node.get("style", ""), re.IGNORECASE)
-        if not declarations:
-            return None
+        declarations = TextParser._inline_values(node.get("style", ""), "display")
         outer = {"block", "inline", "run-in"}
         inner = {"flow", "flow-root", "table", "flex", "grid", "ruby"}
         singles = outer | inner | {
