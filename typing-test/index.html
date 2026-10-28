@@ -253,8 +253,7 @@ let cursorPos = 0;
 let totalKeystrokes = 0;
 let errorKeystrokes = 0;
 let currentBurstIkis = [];
-let errorsAtPos = {};  // pos -> { expected, typed, charsAfter }
-let pendingError = null; // tracking chars typed after an error before correction
+let errorsAtPos = {};  // pos -> { noticeDistance } for errors still in typed text
 
 // ── Init ──
 function init() {
@@ -272,7 +271,6 @@ function init() {
   lastBackspaceTime = 0;
   consecutiveBackspaces = 0;
   currentBurstIkis = [];
-  pendingError = null;
   keystrokes.length = 0;
   ikiValues.length = 0;
   backspaceTimings.length = 0;
@@ -398,9 +396,7 @@ function handleChar(key, now, iki) {
   if (!correct) {
     errorKeystrokes++;
     typos.push({ expected, actual: key, pos: cursorPos });
-    pendingError = { pos: cursorPos, charsAfter: 0 };
-  } else if (pendingError) {
-    pendingError.charsAfter++;
+    errorsAtPos[cursorPos] = { noticeDistance: 0 };
   }
 
   typed[cursorPos] = key;
@@ -416,6 +412,15 @@ function handleBackspace(now, iki) {
   totalKeystrokes++;
   keystrokes.push({ time: now - startTime, key: 'Backspace', correct: true, expected: '', pos: cursorPos });
 
+  // Freeze notice distance at the start of this deletion sequence. A
+  // false alarm may stop before reaching any error; keep those errors pending
+  // until a later sequence actually removes their characters.
+  if (consecutiveBackspaces === 0) {
+    for (const [pos, error] of Object.entries(errorsAtPos)) {
+      error.noticeDistance = cursorPos - Number(pos) - 1;
+    }
+  }
+
   // Track consecutive backspace timing
   if (lastBackspaceTime > 0 && consecutiveBackspaces > 0) {
     const bsIki = now - lastBackspaceTime;
@@ -424,13 +429,12 @@ function handleBackspace(now, iki) {
   lastBackspaceTime = now;
   consecutiveBackspaces++;
 
-  // Track chars before noticing error
-  if (pendingError) {
-    corrections.push({ charsBeforeNoticing: pendingError.charsAfter, pos: pendingError.pos });
-    pendingError = null;
-  }
-
   cursorPos--;
+  const removedError = errorsAtPos[cursorPos];
+  if (removedError) {
+    corrections.push({ charsBeforeNoticing: removedError.noticeDistance, pos: cursorPos });
+    delete errorsAtPos[cursorPos];
+  }
   typed.length = cursorPos;
 }
 
