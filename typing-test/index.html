@@ -498,6 +498,8 @@ function finish() {
 
 // ── Summary ──
 function showSummary() {
+  // Canvas sizing needs layout from the visible summary, including after reset.
+  document.getElementById('summary').classList.add('visible');
   const elapsed = elapsedSeconds();
   const words = cursorPos / 5;
   const wpm = elapsed > 0 ? Math.round((words / elapsed) * 60) : 0;
@@ -627,7 +629,6 @@ function showSummary() {
     drawLineChart('fatigue-chart', wpmOverTime);
   }
 
-  document.getElementById('summary').classList.add('visible');
   document.getElementById('summary').scrollIntoView({ behavior: 'smooth' });
 }
 
