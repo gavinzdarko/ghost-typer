@@ -356,6 +356,19 @@ class TextParser:
         mode = self._inline_keyword(style, "white-space",
                                     {"normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces"})
         if mode is not None:
+            # Wrapping changes layout, while the collapse component determines
+            # which source characters we type. Normalize equivalent modern
+            # shorthands, including omitted components' initial values.
+            tokens = set(mode.split())
+            if tokens <= {"collapse", "preserve", "preserve-breaks", "break-spaces",
+                          "wrap", "nowrap", "none"}:
+                if tokens & {"preserve", "break-spaces"}:
+                    mode = "pre"
+                elif "preserve-breaks" in tokens:
+                    mode = "pre-line"
+                else:
+                    mode = "normal"
+        if mode is not None:
             if mode in ("pre", "pre-wrap", "break-spaces"):
                 fmt["preformatted"] = True
                 fmt["_white_space"] = "pre"
