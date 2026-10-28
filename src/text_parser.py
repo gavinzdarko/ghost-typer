@@ -97,16 +97,11 @@ class TextParser:
             if tag.attrs is not None and self._is_hidden(tag):
                 tag.decompose()
             elif tag.attrs is not None:
-                declarations = re.findall(r"(?:^|;)\s*content-visibility\s*:\s*([^;]+)",
-                                          tag.get("style", ""), re.IGNORECASE)
-                important = [value for value in declarations
-                             if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
-                if declarations:
-                    mode = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
-                                  flags=re.IGNORECASE).strip().lower()
-                    if mode == "hidden" and self._content_visibility_applies(tag):
-                        # The container still creates its own block boundary.
-                        tag.clear()
+                mode = self._inline_keyword(tag.get("style", ""), "content-visibility",
+                                            {"visible", "hidden", "auto"})
+                if mode == "hidden" and self._content_visibility_applies(tag):
+                    # The container still creates its own block boundary.
+                    tag.clear()
 
         # Strip tags that should always be removed
         for tag in soup.find_all(self.STRIP_TAGS):
@@ -155,21 +150,47 @@ class TextParser:
             if not isinstance(node, Tag):
                 continue
             hidden = inherited_hidden
-            declarations = re.findall(r"(?:^|;)\s*visibility\s*:\s*([^;]+)",
-                                      node.get("style", ""), re.IGNORECASE)
-            important = [value for value in declarations
-                         if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
-            if declarations:
-                value = re.sub(r"!\s*important\s*$", "", (important or declarations)[-1],
-                               flags=re.IGNORECASE).strip().lower()
-                if value in ("hidden", "collapse"):
-                    hidden = True
-                elif value in ("visible", "initial"):
-                    hidden = False
+            value = TextParser._inline_keyword(node.get("style", ""), "visibility",
+                                              {"visible", "hidden", "collapse"})
+            if value in ("hidden", "collapse"):
+                hidden = True
+            elif value in ("visible", "initial"):
+                hidden = False
             # Keep visibility for parser-generated markers as well as literal
             # text. A visible descendant does not restore its parent's marker.
             node._ghost_visibility_hidden = hidden
             stack.extend((child, hidden) for child in node.children)
+
+    @staticmethod
+    def _inline_keyword(style: str, prop: str, keywords: set[str]) -> Optional[str]:
+        """Choose literal values after validation, before priority/order.
+
+        Variables, escaped identifiers and external CSS remain outside this
+        parser's model. Recognize modern whitespace shorthand syntax too so a
+        valid unsupported mode does not incorrectly revive an earlier rule.
+        """
+        globals_ = {"inherit", "initial", "unset", "revert", "revert-layer"}
+        candidates = []
+        for raw in re.findall(r"(?:^|;)\s*" + re.escape(prop) + r"\s*:\s*([^;]+)",
+                              style, re.IGNORECASE):
+            important = bool(re.search(r"!\s*important\s*$", raw, re.IGNORECASE))
+            value = " ".join(re.sub(r"!\s*important\s*$", "", raw, flags=re.IGNORECASE).lower().split())
+            valid = value in keywords | globals_
+            if not valid and prop == "white-space":
+                words = value.split()
+                tokens = set(words)
+                collapse = {"collapse", "discard", "preserve", "preserve-breaks", "preserve-spaces", "break-spaces"}
+                wrap = {"wrap", "nowrap"}
+                trim = {"none", "discard-before", "discard-after", "discard-inner"}
+                valid = (bool(words) and len(words) == len(tokens)
+                         and tokens <= collapse | wrap | trim
+                         and len(tokens & collapse) <= 1 and len(tokens & wrap) <= 1
+                         and not ("none" in tokens and len(tokens & trim) > 1))
+            if valid:
+                candidates.append((important, value))
+        if not candidates:
+            return None
+        return max(enumerate(candidates), key=lambda item: (item[1][0], item[0]))[1][1]
 
     @staticmethod
     def _content_visibility_applies(node: Tag) -> bool:
@@ -332,12 +353,9 @@ class TextParser:
 
         # Rich clipboard producers often use CSS rather than PRE elements.
         # white-space is inherited, with normal/nowrap restoring collapse.
-        whitespace = re.findall(r"(?:^|;)\s*white-space\s*:\s*([^;]+)", style, re.IGNORECASE)
-        if whitespace:
-            important = [value for value in whitespace
-                         if re.search(r"!\s*important\s*$", value, re.IGNORECASE)]
-            mode = re.sub(r"!\s*important\s*$", "", (important or whitespace)[-1],
-                          flags=re.IGNORECASE).strip().lower()
+        mode = self._inline_keyword(style, "white-space",
+                                    {"normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces"})
+        if mode is not None:
             if mode in ("pre", "pre-wrap", "break-spaces"):
                 fmt["preformatted"] = True
                 fmt["_white_space"] = "pre"
