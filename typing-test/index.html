@@ -381,8 +381,13 @@ function handleChar(key, now, iki) {
     // Pause detection (>500ms)
     if (iki > 500) {
       let context = 'mid-word';
-      if (cursorPos > 0 && promptChars[cursorPos - 1] === ' ') context = 'word-start';
-      if (cursorPos > 0 && '.!?'.includes(promptChars[cursorPos - 1])) context = 'after-sentence';
+      if (cursorPos > 0 && /\s/.test(typed[cursorPos - 1])) context = 'word-start';
+      // Most people type the separator space before thinking about the next
+      // sentence. Inspect emitted text, including closing quotation marks.
+      let previous = cursorPos - 1;
+      while (previous >= 0 && /[ \t"'”’\)\]\}]/.test(typed[previous])) previous--;
+      if (previous >= 0 && '.!?'.includes(typed[previous])
+          && (previous < cursorPos - 1 || /\s/.test(key))) context = 'after-sentence';
       pauses.push({ duration: iki, context, pos: cursorPos });
     }
 

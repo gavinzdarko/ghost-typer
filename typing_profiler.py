@@ -289,22 +289,30 @@ class TypingAnalyzer:
 
     def _detect_pauses(self) -> None:
         """Find significant pauses and classify them."""
+        boundary = None
         for prev, curr in zip(self.events, self.events[1:]):
             if prev.is_backspace or curr.is_backspace:
+                # Corrections change the visible suffix; do not carry a stale
+                # sentence boundary through deleted/retyped text.
+                boundary = None
                 continue
+            if prev.is_enter:
+                boundary = "paragraph"
+            elif prev.char in SENTENCE_ENDERS:
+                boundary = "sentence"
+            elif prev.is_space or prev.char in '\"\'”’)]}':
+                # Separator spaces and closing quotes keep the preceding
+                # sentence context until the next word actually begins.
+                pass
+            else:
+                boundary = None
             dt = curr.timestamp - prev.timestamp
 
             if dt < THINKING_PAUSE_THRESHOLD:
                 continue
 
-            # Classify
-            if prev.char in SENTENCE_ENDERS and curr.char == " ":
-                if dt >= PARAGRAPH_PAUSE_THRESHOLD:
-                    context = "paragraph"
-                else:
-                    context = "sentence"
-            elif prev.is_enter:
-                context = "paragraph"
+            if boundary and (prev.is_space or prev.is_enter or curr.is_space):
+                context = boundary
             elif prev.is_space or curr.is_space:
                 context = "word_boundary"
             else:
