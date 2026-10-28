@@ -49,11 +49,15 @@ def test_pre_default_keeps_inline_code_and_break_spacing():
 
 @pytest.mark.parametrize("source", [
     '<pre>a{breaks}</pre><p>b</p>',
-    '<p>a</p><pre>{breaks}b</pre>',
     '<pre>a{breaks}</pre><pre>b</pre>',
 ])
 def test_pre_br_preserves_the_same_content_as_literal_newlines_at_block_edges(source):
     assert text(source.format(breaks="<br><br>")) == text(source.format(breaks="\n\n")) == "a\n\n\n\nb"
+
+
+def test_pre_leading_br_remains_while_one_initial_literal_newline_is_ignored():
+    assert text('<p>a</p><pre><br><br>b</pre>') == "a\n\n\n\nb"
+    assert text('<p>a</p><pre>\n\nb</pre>') == "a\n\n\nb"
 
 
 def test_pre_br_and_literal_newline_produce_the_same_planner_paragraph():
