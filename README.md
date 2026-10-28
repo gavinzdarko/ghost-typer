@@ -8,7 +8,7 @@ A macOS menu bar app that types text from your clipboard with realistic human-li
 - **AI-powered planning** — Claude generates unique typing profiles and behavioral patterns for each session
 - **Natural mistakes** — typos, corrections, word rewrites, and abandoned words that mimic real human behavior
 - **Fatigue modeling** — typing gradually slows and error rates increase over time
-- **Rich text support** — handles bold, italic, underline, and other formatting via hotkeys
+- **Rich clipboard text** — extracts visible text, lists, and paragraph breaks from HTML; typed text inherits the destination's style
 - **Table fill mode** — batch-type multiple cells with Tab navigation
 - **Progress overlay** — floating timer shows estimated time remaining
 - **Menu bar controls** — pause, resume, cancel, and configure from the menu bar
