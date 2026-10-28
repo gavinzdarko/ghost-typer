@@ -17,6 +17,32 @@ assert.deepEqual(errorsAtPos, {});
 ''')
 
 
+def test_deletion_sequences_and_key_counts_are_distinct_from_corrected_errors():
+    run('index.html', '''
+promptText = 'abc def ghi'; promptChars = promptText.split('');
+for (const [i, char] of Array.from('xyc').entries()) key('typing-input', char, 100 + i * 100);
+for (let i = 0; i < 3; i++) key('typing-input', 'Backspace', 400 + i * 100);
+let data = buildConfigJSON().measured_data;
+assert.equal(data.corrections, 2);
+assert.equal(data.backspace.total_sequences, 1);
+assert.equal(data.backspace.total_backspaces, 3);
+showSummary();
+assert.ok(element('backspace-table').innerHTML.includes('<td>Total Backspaces</td><td>3</td>'));
+assert.ok(element('backspace-table').innerHTML.includes('<td>Consecutive BS Sequences</td><td>1</td>'));
+// Deleting a correct character is another sequence, but not a corrected error.
+key('typing-input', 'a', 800);
+key('typing-input', 'Backspace', 900);
+data = buildConfigJSON().measured_data;
+assert.equal(data.corrections, 2);
+assert.equal(data.backspace.total_sequences, 2);
+assert.equal(data.backspace.total_backspaces, 4);
+init();
+data = buildConfigJSON().measured_data;
+assert.equal(data.backspace.total_sequences, 0);
+assert.equal(data.backspace.total_backspaces, 0);
+''')
+
+
 def test_multiple_outstanding_errors_keep_their_own_notice_distance():
     run('index.html', '''
 promptText = 'abc def ghi'; promptChars = promptText.split('');
