@@ -85,6 +85,10 @@ class ClipboardMonitor:
     @enabled.setter
     def enabled(self, value: bool) -> None:
         with self._clipboard_lock:
+            if value and not self._enabled:
+                # Copies made while OFF remain ordinary clipboard content.
+                # Start observing at this revision, just as start() does.
+                self._last_change_count = self._get_change_count()
             self._enabled = value
             if not value:
                 self._stage_generation += 1
@@ -161,7 +165,7 @@ class ClipboardMonitor:
         """Get the pasteboard change count (increments each time clipboard changes)."""
         if NSPasteboard is not None:
             pb = NSPasteboard.generalPasteboard()
-            return pb.changeCount()
+            return pb.changeCount() if pb is not None else 0
         # Fallback: no change tracking available
         return 0
 
