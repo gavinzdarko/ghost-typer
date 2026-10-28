@@ -41,6 +41,17 @@ def test_inline_list_item_still_generates_its_marker():
                 '<li style="display:inline list-item">two</li></ul>') == "- one- two"
 
 
+def test_items_without_markers_do_not_advance_or_reset_ordered_counters():
+    assert text('<ol><li style="display:inline">one</li><li>two</li></ol>') == "one\n1. two"
+    assert text('<ol start="4"><li style="display:block" value="100">one</li><li>two</li></ol>') == "one\n4. two"
+    assert text('<ol><li>one</li><li style="display:contents" value="100">two</li><li>three</li></ol>') == "1. one\ntwo\n2. three"
+
+
+def test_reversed_default_counts_only_actual_list_item_boxes():
+    assert text('<ol reversed><li style="display:inline">one</li><li>two</li><li>three</li></ol>') == "one\n2. two\n1. three"
+    assert text('<ol reversed start="9"><li style="display:contents" value="100">one</li><li>two</li></ol>') == "one\n9. two"
+
+
 def test_display_inheritance_priority_and_nested_lists():
     assert text('before<ul style="display:contents"><li style="display:inherit">one</li></ul>after') == "beforeoneafter"
     assert text('<ul style="display:inline"><li style="display:inline!important;display:list-item">one</li></ul>') == "one"

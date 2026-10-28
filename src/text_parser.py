@@ -434,7 +434,8 @@ class TextParser:
         # Lists
         if tag == self.ORDERED_LIST_TAG:
             step = -1 if node.has_attr("reversed") else 1
-            default_start = len(node.find_all("li", recursive=False)) if step < 0 else 1
+            default_start = (sum(self._has_list_marker(child) for child in node.find_all("li", recursive=False))
+                             if step < 0 else 1)
             try:
                 start = int(node.get("start", default_start))
             except (TypeError, ValueError):
@@ -458,7 +459,9 @@ class TextParser:
             return
 
         if tag == self.LIST_ITEM_TAG:
-            if list_context == "numbered" and list_counter is not None:
+            list_marker = self._has_list_marker(node)
+            prefix = ""
+            if list_marker and list_context == "numbered" and list_counter is not None:
                 step = list_counter[1]
                 try:
                     list_counter[0] = int(node["value"]) if node.has_attr("value") else list_counter[0] + step
@@ -468,13 +471,13 @@ class TextParser:
                 prefix = f"{self._ordered_marker(list_counter[0], marker_type)}. "
                 fmt["list_type"] = "numbered"
                 fmt["list_index"] = list_counter[0]
-            else:
+            elif list_marker:
                 prefix = "- "
                 fmt["list_type"] = "bulleted"
 
             if not inline_container:
                 segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
-            if not visibility_hidden and self._has_list_marker(node):
+            if not visibility_hidden and list_marker:
                 segments.append(TextSegment(text=prefix, formatting=dict(fmt, list_prefix=True)))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
