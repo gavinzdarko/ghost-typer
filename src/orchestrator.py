@@ -476,7 +476,7 @@ class Orchestrator:
                 if self._cancel_event.is_set():
                     return
                 segments = self.text_parser.parse(entry.content, is_html=entry.is_html)
-                if not segments or not segments[0].text.strip():
+                if not any(segment.text.strip() for segment in segments):
                     raise ValueError("Table item did not contain typable text")
                 cell_plan = self.fallback_planner.plan(
                     segments, simple=True, cancelled=self._cancel_event.is_set)
