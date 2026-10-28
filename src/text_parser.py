@@ -272,6 +272,16 @@ class TextParser:
         return display == "none"
 
     @staticmethod
+    def _has_list_marker(node: Tag) -> bool:
+        """Only list-item boxes generate a marker, including inherited display."""
+        display = TextParser._inline_display(node)
+        if display == "inherit" and isinstance(node.parent, Tag):
+            return TextParser._has_list_marker(node.parent)
+        if display is None or display in ("revert", "revert-layer"):
+            return node.name == TextParser.LIST_ITEM_TAG
+        return "list-item" in display.split()
+
+    @staticmethod
     def _has_inline_outer_display(node: Tag) -> bool:
         """Honor inline display overrides on otherwise block containers.
 
@@ -430,17 +440,21 @@ class TextParser:
             except (TypeError, ValueError):
                 start = default_start
             counter = [start - step, step, node.get("type", "1")]
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context="numbered", list_counter=counter)
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             return
 
         if tag == self.UNORDERED_LIST_TAG:
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context="bulleted", list_counter=None)
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             return
 
         if tag == self.LIST_ITEM_TAG:
@@ -458,11 +472,14 @@ class TextParser:
                 prefix = "- "
                 fmt["list_type"] = "bulleted"
 
-            if not visibility_hidden:
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+            if not visibility_hidden and self._has_list_marker(node):
                 segments.append(TextSegment(text=prefix, formatting=dict(fmt, list_prefix=True)))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
-            segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
             return
 
         # Table elements
