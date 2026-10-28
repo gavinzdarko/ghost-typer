@@ -80,6 +80,17 @@ class TextParser:
         """
         soup = BeautifulSoup(html, "html.parser")
 
+        # HTML ignores one line feed immediately after a PRE start tag.
+        # html.parser leaves it in the DOM; do not turn source indentation
+        # into an extra Enter. A comment or element first child breaks this
+        # rule, and additional newlines remain actual preserved content.
+        for pre in soup.find_all("pre"):
+            first = next(iter(pre.children), None)
+            if type(first) is NavigableString:
+                value = re.sub(r"^(?:\r\n?|\n)", "", str(first), count=1)
+                if value != str(first):
+                    first.replace_with(value)
+
         # Closed disclosure widgets render only their first direct summary.
         # Select it before hidden elements are removed: a hidden first summary
         # must not promote a later summary into the visible disclosure label.
