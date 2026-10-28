@@ -249,12 +249,13 @@ const wpmOverTime = [];       // { time, wpm, errorRate }
 let lastKeystrokeTime = 0;
 let lastBackspaceTime = 0;
 let consecutiveBackspaces = 0;
+let backspaceCount = 0;
+let backspaceSequences = 0;
 let cursorPos = 0;
 let totalKeystrokes = 0;
 let errorKeystrokes = 0;
 let currentBurstIkis = [];
-let errorsAtPos = {};  // pos -> { expected, typed, charsAfter }
-let pendingError = null; // tracking chars typed after an error before correction
+let errorsAtPos = {};  // pos -> { noticeDistance } for errors still in typed text
 
 // ── Init ──
 function init() {
@@ -271,8 +272,9 @@ function init() {
   lastKeystrokeTime = 0;
   lastBackspaceTime = 0;
   consecutiveBackspaces = 0;
+  backspaceCount = 0;
+  backspaceSequences = 0;
   currentBurstIkis = [];
-  pendingError = null;
   keystrokes.length = 0;
   ikiValues.length = 0;
   backspaceTimings.length = 0;
@@ -403,9 +405,7 @@ function handleChar(key, now, iki) {
   if (!correct) {
     errorKeystrokes++;
     typos.push({ expected, actual: key, pos: cursorPos });
-    pendingError = { pos: cursorPos, charsAfter: 0 };
-  } else if (pendingError) {
-    pendingError.charsAfter++;
+    errorsAtPos[cursorPos] = { noticeDistance: 0 };
   }
 
   typed[cursorPos] = key;
@@ -419,7 +419,18 @@ function handleBackspace(now, iki) {
   flushBurst();
 
   totalKeystrokes++;
+  backspaceCount++;
   keystrokes.push({ time: now - startTime, key: 'Backspace', correct: true, expected: '', pos: cursorPos });
+
+  // Freeze notice distance at the start of this deletion sequence. A
+  // false alarm may stop before reaching any error; keep those errors pending
+  // until a later sequence actually removes their characters.
+  if (consecutiveBackspaces === 0) {
+    backspaceSequences++;
+    for (const [pos, error] of Object.entries(errorsAtPos)) {
+      error.noticeDistance = cursorPos - Number(pos) - 1;
+    }
+  }
 
   // Track consecutive backspace timing
   if (lastBackspaceTime > 0 && consecutiveBackspaces > 0) {
@@ -429,13 +440,12 @@ function handleBackspace(now, iki) {
   lastBackspaceTime = now;
   consecutiveBackspaces++;
 
-  // Track chars before noticing error
-  if (pendingError) {
-    corrections.push({ charsBeforeNoticing: pendingError.charsAfter, pos: pendingError.pos });
-    pendingError = null;
-  }
-
   cursorPos--;
+  const removedError = errorsAtPos[cursorPos];
+  if (removedError) {
+    corrections.push({ charsBeforeNoticing: removedError.noticeDistance, pos: cursorPos });
+    delete errorsAtPos[cursorPos];
+  }
   typed.length = cursorPos;
 }
 
@@ -584,10 +594,10 @@ function showSummary() {
 
   // Backspace
   fillTable('backspace-table', [
-    ['Total Backspaces', backspaceTimings.length + corrections.length],
+    ['Total Backspaces', backspaceCount],
     ['Median BS Delay', Math.round(bsMedian) + ' ms'],
     ['Mean BS Delay', Math.round(bsMean) + ' ms'],
-    ['Consecutive BS Sequences', corrections.length],
+    ['Consecutive BS Sequences', backspaceSequences],
   ]);
 
   // Pauses
@@ -856,7 +866,8 @@ function buildConfigJSON() {
       backspace: {
         median_delay_ms: Math.round(bsMedian),
         mean_delay_ms: Math.round(sortedBs.reduce((a,b) => a+b, 0) / (sortedBs.length || 1)),
-        total_sequences: corrections.length,
+        total_sequences: backspaceSequences,
+        total_backspaces: backspaceCount,
       },
       pauses: {
         total: pauses.length,
