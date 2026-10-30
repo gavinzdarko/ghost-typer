@@ -211,7 +211,6 @@ class TypingPlanner:
         self._pending_autocorrects: list[dict] = []
         self._char_position = 0
         self._typed_prefix = ""
-        self._chunk_prefix = ""
         self._cancelled = lambda: False
 
     def _check_cancelled(self) -> None:
@@ -446,13 +445,9 @@ class TypingPlanner:
                     restructured = True
 
             if not restructured:
-                # Full emitted text is only needed by verified autocorrect
-                # navigation. Reading it for every ordinary chunk defeats the
-                # replay buffer by repeatedly materializing the growing prefix.
-                if self._behavioral_content.get("autocorrect_fixes"):
-                    self._chunk_prefix = emitted.text
                 chunk_actions, chunk_chars, chunk_typos = self._plan_chunk(
                     chunk, misspell_by_position=chunk_misspellings, total_paste_chars=total_paste_chars,
+                    emitted_state=emitted,
                     defer_paragraph_pause=((chunk_idx + 1 == len(chunks) and defer_paragraph_pause)
                         or (chunk_idx + 1 < len(chunks)
                             and not chunks[chunk_idx + 1].text.strip()
@@ -759,6 +754,7 @@ class TypingPlanner:
         self, chunk: _Chunk, misspell_by_position: dict[int, tuple[str, str]] | None = None,
         total_paste_chars: int = 500,
         defer_paragraph_pause: bool = False,
+        emitted_state: PlannedText | None = None,
     ) -> tuple[list[TypingAction], int, list[tuple[str, str, int]]]:
         """Plan actions for a single chunk of text.
 
@@ -904,7 +900,7 @@ class TypingPlanner:
                 char_count += len(run_text)
 
                 # --- Autocorrect tracking (Feature 12) ---
-                self._track_autocorrect_words(run_text, actions)
+                self._track_autocorrect_words(run_text, actions, emitted_state=emitted_state)
 
                 # Research: 35-44% of backspace presses are false alarms.
                 # Occasionally backspace correct text then retype it.
@@ -1997,7 +1993,10 @@ class TypingPlanner:
     # Feature 12: Autocorrect fixes
     # ------------------------------------------------------------------
 
-    def _track_autocorrect_words(self, run_text: str, actions: list[TypingAction]) -> None:
+    def _track_autocorrect_words(
+        self, run_text: str, actions: list[TypingAction],
+        *, emitted_state: PlannedText | None = None,
+    ) -> None:
         """Defer verified, unique emitted words; AI offsets never select text."""
         cfg = self.profile.behaviors.autocorrect
         if not cfg.enabled or self._autocorrect_attempts >= cfg.max_per_session:
@@ -2026,7 +2025,10 @@ class TypingPlanner:
             # Rejected ambiguous or distant edits also consume work. Otherwise
             # repeated candidates replay and search every growing chunk prefix.
             self._autocorrect_attempts += 1
-            state = PlannedText(self._chunk_prefix).apply(actions)
+            # Materialize the shared prefix only for an actual bounded attempt.
+            # Optional annotations alone must not copy it for every chunk.
+            prefix = emitted_state.text if emitted_state is not None else ""
+            state = PlannedText(prefix).apply(actions)
             edits = self._build_autocorrect_fix(
                 pending["word"], pending["correct"],
                 known_text=state.text if state.valid else "",
