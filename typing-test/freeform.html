@@ -89,10 +89,15 @@
 let startTime = 0, started = false, lastTime = 0, lastBsTime = 0;
 let charCount = 0, bsCount = 0;
 let finished = false, finishTime = null;
+let liveTextChars = 0, liveTextWords = 0;
 
 // Match the engine and prompted profiler: one WPM unit is five characters.
+function wpmForCharCount(characters, seconds) {
+  return seconds > 0 ? Math.round((characters / 5 / seconds) * 60) : 0;
+}
+
 function standardWpm(text, seconds) {
-  return seconds > 0 ? Math.round((Array.from(text).length / 5 / seconds) * 60) : 0;
+  return seconds > 0 ? wpmForCharCount(Array.from(text).length, seconds) : 0;
 }
 
 function elapsedSeconds() {
@@ -142,7 +147,9 @@ area.addEventListener('keydown', e => {
     prevChar = e.key === 'Enter' ? '' : e.key;
   }
   lastTime = e.key === 'Backspace' ? 0 : now;
-  updateLive();
+  // keydown precedes the browser edit. Keep capture immediate and let the
+  // existing 500 ms timer count the updated document, outside this hot path.
+  updateLive(false);
 });
 
 function flushBurst() {
@@ -157,16 +164,19 @@ function startTimer() {
   timerInterval = setInterval(updateLive, 500);
 }
 
-function updateLive() {
+function updateLive(refreshText = true) {
   const t = elapsedSeconds();
-  const text = area.value;
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  const wpm = standardWpm(area.value, t);
+  if (refreshText) {
+    const text = area.value;
+    liveTextChars = Array.from(text).length;
+    liveTextWords = text.trim().split(/\s+/).filter(Boolean).length;
+  }
+  const wpm = wpmForCharCount(liveTextChars, t);
   const avgIki = ikis.length > 0 ? Math.round(ikiSum/ikis.length) : 0;
   const avgBs = bsIkis.length > 0 ? Math.round(bsIkiSum/bsIkis.length) : 0;
   document.getElementById('s-wpm').textContent = wpm;
   document.getElementById('s-chars').textContent = charCount;
-  document.getElementById('s-words').textContent = words;
+  document.getElementById('s-words').textContent = liveTextWords;
   document.getElementById('s-bs').textContent = bsCount;
   document.getElementById('s-iki').textContent = avgIki;
   document.getElementById('s-bsrate').textContent = avgBs;
