@@ -246,6 +246,7 @@ const typos = [];             // { expected, actual, pos }
 const corrections = [];       // { charsBeforeNoticing, pos }
 const wpmOverTime = [];       // { time, wpm, errorRate }
 
+let ikiSum = 0;  // Live means must not rescan the growing sample array.
 let lastKeystrokeTime = 0;
 let lastBackspaceTime = 0;
 let consecutiveBackspaces = 0;
@@ -277,6 +278,7 @@ function init() {
   currentBurstIkis = [];
   keystrokes.length = 0;
   ikiValues.length = 0;
+  ikiSum = 0;
   backspaceTimings.length = 0;
   pauses.length = 0;
   bursts.length = 0;
@@ -367,6 +369,7 @@ function handleChar(key, now, iki) {
 
   if (iki > 0) {
     ikiValues.push(iki);
+    ikiSum += iki;
 
     // Digraph timing
     if (cursorPos > 0 && cursorPos <= promptChars.length) {
@@ -486,7 +489,7 @@ function updateLiveStats() {
   const words = cursorPos / 5;
   const wpm = elapsed > 0 ? Math.round((words / elapsed) * 60) : 0;
   const accuracy = totalKeystrokes > 0 ? Math.round((1 - errorKeystrokes / totalKeystrokes) * 100) : 100;
-  const avgIki = ikiValues.length > 0 ? Math.round(ikiValues.reduce((a,b) => a+b, 0) / ikiValues.length) : 0;
+  const avgIki = ikiValues.length > 0 ? Math.round(ikiSum / ikiValues.length) : 0;
 
   document.getElementById('live-wpm').textContent = wpm;
   document.getElementById('live-accuracy').textContent = accuracy + '%';
