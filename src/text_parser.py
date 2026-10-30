@@ -572,7 +572,8 @@ class TextParser:
                 if list_counter is not None:
                     step = list_counter[1]
                     try:
-                        list_counter[0] = int(node["value"]) if node.has_attr("value") else list_counter[0] + step
+                        list_counter[0] = (int(node["value"]) if list_context == "numbered" and node.has_attr("value")
+                                           else list_counter[0] + step)
                     except (TypeError, ValueError):
                         list_counter[0] += step
                     number = list_counter[0]

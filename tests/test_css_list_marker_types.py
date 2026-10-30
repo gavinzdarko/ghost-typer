@@ -35,3 +35,8 @@ def test_global_values_and_nested_lists_keep_element_defaults():
     assert text('<ol style="list-style-type:none"><li>one<ol><li>inner</li></ol></li><li>two</li></ol>') == 'one\n1. inner\ntwo'
     assert text('<ul style="list-style-type:lower-alpha"><li>one</li>'
                 '<li style="display:inline">inline</li><li>two</li></ul>') == 'a. one\ninline\nb. two'
+
+
+def test_value_hint_only_resets_ordered_list_counters():
+    assert text('<ul style="list-style-type:decimal"><li value="99">one</li><li>two</li></ul>') == '1. one\n2. two'
+    assert text('<ol style="list-style-type:decimal"><li value="99">one</li><li>two</li></ol>') == '99. one\n100. two'
