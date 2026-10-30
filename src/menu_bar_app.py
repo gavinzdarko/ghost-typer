@@ -534,25 +534,19 @@ class GhostTyperApp(rumps.App):
         self.orchestrator.clipboard_monitor.trigger_paste()
 
     def _hotkey_toggle_enabled(self) -> None:
-        """Ctrl+F6 pressed — toggle on/off."""
+        """Ctrl+F6 pressed — serialize toggle intent with menu commands."""
         if self._shutting_down or getattr(self, '_settings_modal_active', False):
             return
-        if self.orchestrator.is_enabled:
-            self.orchestrator.disable(blocking=False)
-            def _off():
-                self._toggle_item.title = "Turn ON"
-                self._status_item.title = "Status: Off"
-                self.icon = ICON_OFF
-                self._stop_animation()
-                self._progress_overlay.hide()
-            self._run_on_main(_off)
-        else:
-            self.orchestrator.enable()
-            def _on():
-                self._toggle_item.title = "Turn OFF"
-                self._status_item.title = "Status: Idle"
-                self.icon = ICON_IDLE
-            self._run_on_main(_on)
+
+        def _toggle_current():
+            if self._shutting_down or getattr(self, '_settings_modal_active', False):
+                return
+            self._toggle(self._toggle_item)
+
+        # Each released/repressed hotkey starts its own worker. Choose ON/OFF
+        # on the main thread so overlapping workers cannot both choose OFF
+        # while the first cancellation is still publishing its disabled state.
+        self._run_on_main(_toggle_current)
 
     # ── State change handler ──
 
