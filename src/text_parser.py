@@ -339,6 +339,41 @@ class TextParser:
         return "list-item" in display.split()
 
     @staticmethod
+    def _list_marker_type(node: Tag) -> str:
+        """Resolve supported inline marker literals and HTML presentational hints.
+
+        list-style-type inherits, but nested OL/UL elements have their own
+        browser defaults. A LI's own HTML type also beats an inherited value.
+        Marker suppression is independent of list-item counter advancement.
+        """
+        keywords = {"none", "disc", "circle", "square", "decimal",
+                    "lower-alpha", "upper-alpha", "lower-latin", "upper-latin",
+                    "lower-roman", "upper-roman"}
+        hints = {"1": "decimal", "a": "lower-alpha", "A": "upper-alpha",
+                 "i": "lower-roman", "I": "upper-roman"}
+        while isinstance(node, Tag):
+            value = TextParser._inline_keyword(node.get("style", ""), "list-style-type", keywords)
+            if value == "initial":
+                return "disc"
+            if value in ("inherit", "unset"):
+                node = node.parent
+                continue
+            if value in keywords:
+                return value
+            if value not in ("revert", "revert-layer"):
+                hint = node.get("type")
+                if node.name in ("ol", "li") and hint in hints:
+                    return hints[hint]
+                if node.name in ("ul", "li") and hint in ("disc", "circle", "square"):
+                    return hint
+            if node.name == "ol":
+                return "decimal"
+            if node.name == "ul":
+                return "disc"
+            node = node.parent
+        return "disc"
+
+    @staticmethod
     def _has_inline_outer_display(node: Tag) -> bool:
         """Honor inline display overrides on otherwise block containers.
 
@@ -520,10 +555,11 @@ class TextParser:
             return
 
         if tag == self.UNORDERED_LIST_TAG:
+            counter = [0, 1, "1"]
             if not inline_container:
                 segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             for child in node.children:
-                self._walk_node(child, fmt, segments, list_context="bulleted", list_counter=None)
+                self._walk_node(child, fmt, segments, list_context="bulleted", list_counter=counter)
             if not inline_container:
                 segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             return
@@ -531,19 +567,27 @@ class TextParser:
         if tag == self.LIST_ITEM_TAG:
             list_marker = self._has_list_marker(node)
             prefix = ""
-            if list_marker and list_context == "numbered" and list_counter is not None:
-                step = list_counter[1]
-                try:
-                    list_counter[0] = int(node["value"]) if node.has_attr("value") else list_counter[0] + step
-                except (TypeError, ValueError):
-                    list_counter[0] += step
-                marker_type = node.get("type", list_counter[2])
-                prefix = f"{self._ordered_marker(list_counter[0], marker_type)}. "
-                fmt["list_type"] = "numbered"
-                fmt["list_index"] = list_counter[0]
-            elif list_marker:
-                prefix = "- "
-                fmt["list_type"] = "bulleted"
+            if list_marker:
+                number = 1
+                if list_counter is not None:
+                    step = list_counter[1]
+                    try:
+                        list_counter[0] = (int(node["value"]) if list_context == "numbered" and node.has_attr("value")
+                                           else list_counter[0] + step)
+                    except (TypeError, ValueError):
+                        list_counter[0] += step
+                    number = list_counter[0]
+                marker_type = self._list_marker_type(node)
+                marker_codes = {"decimal": "1", "lower-alpha": "a", "upper-alpha": "A",
+                                "lower-latin": "a", "upper-latin": "A",
+                                "lower-roman": "i", "upper-roman": "I"}
+                if marker_type in marker_codes:
+                    prefix = f"{self._ordered_marker(number, marker_codes[marker_type])}. "
+                    fmt["list_type"] = "numbered"
+                    fmt["list_index"] = number
+                elif marker_type != "none":
+                    prefix = "- "
+                    fmt["list_type"] = "bulleted"
 
             if not inline_container:
                 segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
