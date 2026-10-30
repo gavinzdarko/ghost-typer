@@ -544,6 +544,17 @@ class TypingAnalyzer:
             ),
         }
 
+        # Export values accepted by Settings.from_dict. Valid recordings can
+        # contain long idle gaps or unusually fast input; importing those
+        # measurements must not silently replace them with unrelated defaults.
+        # Keep the raw measurements below and on the analyzer unchanged.
+        settings["wpm"] = max(1, min(1000, settings["wpm"]))
+        settings["wpm_variance"] = min(1000, settings["wpm_variance"])
+        for prefix in ("pause_duration", "sentence_pause", "paragraph_pause", "burst_length"):
+            for suffix in ("_min", "_max"):
+                key = prefix + suffix
+                settings[key] = min(3600, settings[key])
+
         # --- Build full profile (settings + detailed analysis) ---
         profile = {
             "ghost_typer_settings": settings,
