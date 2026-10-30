@@ -539,20 +539,23 @@ class GhostTyperApp(rumps.App):
             return
         if self.orchestrator.is_enabled:
             self.orchestrator.disable(blocking=False)
-            def _off():
-                self._toggle_item.title = "Turn ON"
+        else:
+            self.orchestrator.enable()
+
+        def _update():
+            # A newer menu command or hotkey can win before this GUI turn.
+            # Render current ownership instead of replaying the old intent.
+            enabled = self.orchestrator.is_enabled
+            self._toggle_item.title = "Turn OFF" if enabled else "Turn ON"
+            if not enabled:
                 self._status_item.title = "Status: Off"
                 self.icon = ICON_OFF
                 self._stop_animation()
                 self._progress_overlay.hide()
-            self._run_on_main(_off)
-        else:
-            self.orchestrator.enable()
-            def _on():
-                self._toggle_item.title = "Turn OFF"
+            elif self.orchestrator.state == OrchestratorState.IDLE:
                 self._status_item.title = "Status: Idle"
                 self.icon = ICON_IDLE
-            self._run_on_main(_on)
+        self._run_on_main(_update)
 
     # ── State change handler ──
 
