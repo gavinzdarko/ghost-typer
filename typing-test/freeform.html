@@ -99,6 +99,7 @@ function elapsedSeconds() {
   return started ? ((finishTime ?? performance.now()) - startTime) / 1000 : 0;
 }
 const ikis = [], bsIkis = [], pauses = [], bursts = [];
+let ikiSum = 0, bsIkiSum = 0;
 const digraphs = {};
 let prevChar = '', currentBurst = [], timerInterval = null;
 
@@ -118,7 +119,7 @@ area.addEventListener('keydown', e => {
 
   if (e.key === 'Backspace') {
     bsCount++;
-    if (lastBsTime > 0) { const d = now - lastBsTime; bsIkis.push(d); }
+    if (lastBsTime > 0) { const d = now - lastBsTime; bsIkis.push(d); bsIkiSum += d; }
     lastBsTime = now;
     prevChar = '';
     flushBurst();
@@ -127,6 +128,7 @@ area.addEventListener('keydown', e => {
     lastBsTime = 0;
     if (iki > 0) {
       ikis.push(iki);
+      ikiSum += iki;
       if (iki > 500) pauses.push(iki);
       // digraph
       if (prevChar && /^[a-z]$/i.test(prevChar) && /^[a-z]$/i.test(e.key)) {
@@ -160,8 +162,8 @@ function updateLive() {
   const text = area.value;
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   const wpm = standardWpm(area.value, t);
-  const avgIki = ikis.length > 0 ? Math.round(ikis.reduce((a,b)=>a+b,0)/ikis.length) : 0;
-  const avgBs = bsIkis.length > 0 ? Math.round(bsIkis.reduce((a,b)=>a+b,0)/bsIkis.length) : 0;
+  const avgIki = ikis.length > 0 ? Math.round(ikiSum/ikis.length) : 0;
+  const avgBs = bsIkis.length > 0 ? Math.round(bsIkiSum/bsIkis.length) : 0;
   document.getElementById('s-wpm').textContent = wpm;
   document.getElementById('s-chars').textContent = charCount;
   document.getElementById('s-words').textContent = words;
@@ -280,6 +282,7 @@ function copyData() {
 function reset() {
   finished = false; finishTime = null; startTime = 0; area.readOnly = false;
   started = false; lastTime = 0; lastBsTime = 0; charCount = 0; bsCount = 0;
+  ikiSum = 0; bsIkiSum = 0;
   ikis.length = 0; bsIkis.length = 0; pauses.length = 0; bursts.length = 0;
   Object.keys(digraphs).forEach(k => delete digraphs[k]);
   prevChar = ''; currentBurst = [];
