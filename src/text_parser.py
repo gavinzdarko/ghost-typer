@@ -568,6 +568,8 @@ class TextParser:
             return
 
         if tag in ("tr", "dt", "dd"):
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             if tag == "dd" and not inline_container:
                 segments.append(TextSegment(text="  ", formatting={}))
             for child in node.children:

@@ -19,8 +19,8 @@ def test_specialized_nodes_without_block_boxes_do_not_invent_separators(display)
 
 
 def test_contents_containers_keep_descendant_table_and_definition_boundaries():
-    assert text('before<table style="display:contents"><tr><td>one</td><td>two</td></tr></table>after') == 'beforeone two\nafter'
-    assert text('before<dl style="display:contents"><dt>one</dt><dd>two</dd></dl>after') == 'beforeone\ntwo\nafter'
+    assert text('before<table style="display:contents"><tr><td>one</td><td>two</td></tr></table>after') == 'before\none two\nafter'
+    assert text('before<dl style="display:contents"><dt>one</dt><dd>two</dd></dl>after') == 'before\none\ntwo\nafter'
 
 
 def test_specialized_display_uses_priority_inheritance_and_valid_declarations():
