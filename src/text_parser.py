@@ -555,46 +555,32 @@ class TextParser:
                 segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             return
 
-        # Table elements
-        if tag == "table":
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
+        # Specialized containers can lose their outer boxes through display:
+        # contents/inline just like paragraphs and lists. Their descendants
+        # still determine their own boundaries.
+        if tag in ("table", "dl"):
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
             return
 
-        if tag == "tr":
+        if tag in ("tr", "dt", "dd"):
+            if tag == "dd" and not inline_container:
+                segments.append(TextSegment(text="  ", formatting={}))
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
-            segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+            if not inline_container:
+                segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
             return
 
         if tag in ("td", "th"):
             for child in node.children:
                 self._walk_node(child, fmt, segments, list_context, list_counter)
-            # Tab separator between cells
-            segments.append(TextSegment(text=" ", formatting={}))
-            return
-
-        # Definition lists
-        if tag == "dl":
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
-            for child in node.children:
-                self._walk_node(child, fmt, segments, list_context, list_counter)
-            segments.append(TextSegment(text="\n", formatting={"paragraph_break": True}))
-            return
-
-        if tag == "dt":
-            for child in node.children:
-                self._walk_node(child, fmt, segments, list_context, list_counter)
-            segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
-            return
-
-        if tag == "dd":
-            segments.append(TextSegment(text="  ", formatting={}))
-            for child in node.children:
-                self._walk_node(child, fmt, segments, list_context, list_counter)
-            segments.append(TextSegment(text="\n", formatting={"linebreak": True}))
+            if not inline_container:
+                segments.append(TextSegment(text=" ", formatting={}))
             return
 
         # Default: recurse into children
