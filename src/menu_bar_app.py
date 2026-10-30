@@ -468,11 +468,16 @@ class GhostTyperApp(rumps.App):
     def _on_table_queue_change(self, count: int) -> None:
         """Update menu when table queue changes."""
         def _update():
+            # Producers notify after releasing the queue lock. Notifications
+            # can arrive out of order, so display the live queue at delivery.
+            count = self.orchestrator.table_queue_count()
             self._table_run_item.title = f"Run Table ({count} item{'s' if count != 1 else ''})" if count > 0 else "Run Table (0 items)"
-            if count > 0:
-                self._status_item.title = f"Table Fill: {count} item{'s' if count != 1 else ''} queued"
-            elif not self.orchestrator.table_fill_mode:
-                self._table_fill_item.state = 0
+            self._table_fill_item.state = int(self.orchestrator.table_fill_mode)
+            if not self.orchestrator.is_enabled:
+                self._status_item.title = "Status: Off"
+            elif self.orchestrator.state == OrchestratorState.IDLE:
+                self._status_item.title = (f"Table Fill: {count} item{'s' if count != 1 else ''} queued"
+                                           if count > 0 else "Status: Idle")
         self._run_on_main(_update)
 
     def _quit(self, _sender: rumps.MenuItem) -> None:
