@@ -40,9 +40,20 @@ class PlannedText:
         self.typos = [(wrong, correct, pos if pos + len(wrong) <= start else pos + delta)
                       for wrong, correct, pos in self.typos
                       if pos + len(wrong) <= start or pos >= end]
-        if start == end == self._length:
-            # Most replay events append to the insertion endpoint. Buffer them
-            # instead of copying every earlier character for each keystroke.
+        if end == self._length:
+            # Most edits append or correct recent text at the endpoint. Trim
+            # buffered pieces before touching the materialized prefix, so a
+            # one-key correction does not copy the entire document.
+            remaining = end - start
+            while remaining and self._appends:
+                last = self._appends.pop()
+                if len(last) > remaining:
+                    self._appends.append(last[:-remaining])
+                    remaining = 0
+                else:
+                    remaining -= len(last)
+            if remaining:
+                self._text = self._text[:-remaining]
             if text:
                 self._appends.append(text)
         else:
