@@ -899,9 +899,6 @@ class TypingPlanner:
                 actions.extend(word_actions)
                 char_count += len(run_text)
 
-                # --- Autocorrect tracking (Feature 12) ---
-                self._track_autocorrect_words(run_text, actions, emitted_state=emitted_state)
-
                 # Research: 35-44% of backspace presses are false alarms.
                 # Occasionally backspace correct text then retype it.
                 if text.isascii() and len(run_text) >= 3 and self.engine.should_false_alarm():
@@ -909,15 +906,17 @@ class TypingPlanner:
                     deleted_text = run_text[-fa_chars:]
                     # Tab/control events may move focus rather than insert a
                     # deletable character. Never backspace through them.
-                    if not deleted_text.isprintable():
-                        self._char_position += i - run_start
-                        continue
-                    actions.append(Pause(duration=self._rng.uniform(0.2, 0.5)))
-                    actions.append(Rewrite.simple(
-                        delete_count=fa_chars,
-                        text=deleted_text,
-                        description=f"False alarm: delete {fa_chars} correct chars, retype",
-                    ))
+                    if deleted_text.isprintable():
+                        actions.append(Pause(duration=self._rng.uniform(0.2, 0.5)))
+                        actions.append(Rewrite.simple(
+                            delete_count=fa_chars,
+                            text=deleted_text,
+                            description=f"False alarm: delete {fa_chars} correct chars, retype",
+                        ))
+
+                # A false alarm restores this run's source suffix. Apply it
+                # before autocorrect can change that suffix or its length.
+                self._track_autocorrect_words(run_text, actions, emitted_state=emitted_state)
 
             self._char_position += (i - run_start) if i > run_start else 0
 
