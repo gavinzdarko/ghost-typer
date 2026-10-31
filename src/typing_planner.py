@@ -182,6 +182,7 @@ class TypingPlanner:
     # Includes repeats and nested rewrites. Exhaustion falls back to local typing.
     MAX_DRAFT_REQUESTS_PER_PLAN = 8
     MAX_DRAFT_CONTEXT_CHARS = 1_000
+    MAX_DRAFT_SPAN_CHARS = 2_000
     MAX_REVISIT_REQUESTS_PER_PLAN = 5
 
     def __init__(self, settings: Settings | None = None, ai_rewriter=None, profile: TypingProfile | None = None, *, ai_enabled: bool = True, api_key: str | None = None) -> None:
@@ -1219,6 +1220,8 @@ class TypingPlanner:
         'word', 'sentence', or 'paragraph'.
         No minimum spacing constraint — rewrites can be back-to-back.
         """
+        if not self._ai_rewriter or not self._ai_rewriter.is_enabled:
+            return []
         positions: list[tuple[int, str]] = []
 
         # Find word boundary positions
@@ -1342,21 +1345,22 @@ class TypingPlanner:
         actions: list[TypingAction] = []
 
         # Extract the span to rewrite based on granularity
-        remaining = text[pos:]
-
+        # A longer span cannot be sent to the rewriter. Inspect one extra
+        # character to reject oversize spans rather than rewrite a truncation.
+        span_end = min(len(text), pos + self.MAX_DRAFT_SPAN_CHARS + 1)
         if granularity == "word":
             word_count = self.engine.rewrite_word_count()
-            match = re.match(r"(?:\s*\S+){1," + str(word_count) + r"}", remaining)
+            match = re.compile(r"(?:\s*\S+){1," + str(word_count) + r"}").match(text, pos, span_end)
         elif granularity == "sentence":
-            match = re.match(r"[^.!?\n]*[.!?](?:\s|$)?", remaining)
+            match = re.compile(r"[^.!?\n]*[.!?](?:\s|$)?").match(text, pos, span_end)
             if not match:
-                match = re.match(r"[^\n]+", remaining)
+                match = re.compile(r"[^\n]+").match(text, pos, span_end)
         elif granularity == "paragraph":
-            match = re.match(r"[^\n]*(?:\n(?!\n)[^\n]*)*", remaining)
+            match = re.compile(r"[^\n]*(?:\n(?!\n)[^\n]*)*").match(text, pos, span_end)
         else:
             match = None
 
-        if not match:
+        if not match or match.end() - pos > self.MAX_DRAFT_SPAN_CHARS:
             return [], 0, 0
 
         original_span = match.group(0)
