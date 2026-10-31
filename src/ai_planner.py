@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from collections import OrderedDict
+from copy import deepcopy
 from typing import Any, Optional
 
 import anthropic
@@ -1036,8 +1037,10 @@ Mark 2-5 zones. start/end are char offsets. Most essay text is "composition".
 class AIProfileGenerator:
     """Generates unique TypingProfile per session via Claude Haiku."""
 
-    def __init__(self, settings: Settings | None = None, api_key: str | None = None, *, enabled: bool = True) -> None:
+    def __init__(self, settings: Settings | None = None, api_key: str | None = None, *,
+                 enabled: bool = True, fallback_profile: TypingProfile | None = None) -> None:
         self.settings = settings or Settings()
+        self._fallback_profile = deepcopy(fallback_profile) if fallback_profile is not None else TypingProfile.defaults()
         self._client: anthropic.Anthropic | None = None
         self._enabled = False
 
@@ -1056,10 +1059,10 @@ class AIProfileGenerator:
     def generate_profile(self, text: str) -> TypingProfile:
         """Generate a unique TypingProfile for this text and session.
 
-        Falls back to TypingProfile.defaults() on any failure.
+        Falls back to a fresh copy of the configured baseline on any failure.
         """
         if not self.is_enabled or not text.strip():
-            return TypingProfile.defaults()
+            return deepcopy(self._fallback_profile)
 
         import hashlib
         import time as _time
@@ -1093,8 +1096,8 @@ class AIProfileGenerator:
             )
 
             if getattr(response, "stop_reason", None) == "max_tokens":
-                logger.warning("AI profile response exceeded its token budget; using defaults")
-                return TypingProfile.defaults()
+                logger.warning("AI profile response exceeded its token budget; using baseline profile")
+                return deepcopy(self._fallback_profile)
             response_text = response.content[0].text.strip()
             # Strip markdown fences if present
             if response_text.startswith("```"):
@@ -1108,11 +1111,11 @@ class AIProfileGenerator:
                 return profile
 
         except json.JSONDecodeError:
-            logger.warning("AI profile response was not valid JSON, using defaults")
+            logger.warning("AI profile response was not valid JSON, using baseline profile")
         except Exception:
-            logger.exception("AI profile generation failed, using defaults")
+            logger.exception("AI profile generation failed, using baseline profile")
 
-        return TypingProfile.defaults()
+        return deepcopy(self._fallback_profile)
 
     def generate_behavioral_content(self, text: str) -> dict[str, Any]:
         """Generate content-specific behaviors (abandonments, restructures, etc.).
