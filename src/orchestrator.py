@@ -84,7 +84,8 @@ class Orchestrator:
         ai_enabled = self._settings_dict.get("ai_enabled", True)
         self.ai_planner = AIPlanner(self._settings, api_key=_api_key, enabled=ai_enabled)
         self.ai_rewriter = AIRewriter(api_key=_api_key, enabled=ai_enabled)
-        self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=_api_key, enabled=ai_enabled)
+        self.ai_profile_generator = AIProfileGenerator(
+            self._settings, api_key=_api_key, enabled=ai_enabled, fallback_profile=self._baseline_profile)
         self.visual_verifier = VisualVerifier(
             enabled=self._settings_dict.get("verify_after_typing", False),
         )
@@ -626,7 +627,8 @@ class Orchestrator:
         new_key = self._resolve_api_key(settings_dict)
         self.ai_planner = AIPlanner(self._settings, api_key=new_key, enabled=ai_enabled)
         self.ai_rewriter = AIRewriter(api_key=new_key, enabled=ai_enabled)
-        self.ai_profile_generator = AIProfileGenerator(self._settings, api_key=new_key, enabled=ai_enabled)
+        self.ai_profile_generator = AIProfileGenerator(
+            self._settings, api_key=new_key, enabled=ai_enabled, fallback_profile=self._baseline_profile)
         self.fallback_planner = TypingPlanner(
             self._settings, ai_rewriter=self.ai_rewriter, ai_enabled=ai_enabled, api_key=new_key,
         )
