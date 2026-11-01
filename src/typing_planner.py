@@ -565,7 +565,8 @@ class TypingPlanner:
             char = text[i]
 
             # Occasional single-char mistake (backspace and fix, no arrow keys)
-            if char.isascii() and char.isalpha() and self._rng.random() < self.settings.error_rate:
+            if (char.isascii() and char.isalpha()
+                    and self._rng.random() < self._planned_error_rate(i)):
                 typo_char = self.engine.generate_typo(char)
                 if (typo_char and typo_char != char and len(typo_char) == 1
                         and typo_char.isascii() and typo_char.isprintable()):
@@ -582,7 +583,8 @@ class TypingPlanner:
             # Consume its source character normally instead of rerolling the
             # same position forever when the configured error rate is 100%.
             i += 1
-            while i < len(text) and not (text[i].isascii() and text[i].isalpha() and self._rng.random() < self.settings.error_rate):
+            while i < len(text) and not (text[i].isascii() and text[i].isalpha()
+                    and self._rng.random() < self._planned_error_rate(i)):
                 i += 1
                 if i - run_start > 8:  # break runs to keep them natural
                     break
@@ -1114,13 +1116,32 @@ class TypingPlanner:
     # Mistake planning (single-char adjacent key misclicks)
     # ------------------------------------------------------------------
 
+    def _planned_error_rate(self, local_position: int) -> float:
+        """Approximate fatigue from consumed source, independently of runtime.
+
+        The execution engine has not typed yet. Source progress gives planning
+        a bounded fatigue estimate across chunks, structural breaks and skipped
+        Unicode regions without predicting correction keys or pause recovery.
+        Runtime burst timing remains separate from this approximation.
+        """
+        rate = self.settings.error_rate
+        if rate <= 0:
+            return 0.0
+        if self.settings.fatigue_enabled:
+            fatigue = min((self._char_position + local_position) * self.settings.fatigue_rate,
+                          self.profile.fatigue.max_level)
+            rate += fatigue * self.profile.mistakes.fatigue_error_boost
+        return min(1.0, max(0.0, rate))
+
     def _pick_mistake_positions(self, text: str) -> set[int]:
         """Choose which character positions in `text` will have typos."""
         positions: set[int] = set()
         for i, char in enumerate(text):
+            if i % 256 == 0:
+                self._check_cancelled()
             if not char.isalpha():
                 continue
-            if self._rng.random() < self.settings.error_rate:
+            if self._rng.random() < self._planned_error_rate(i):
                 positions.add(i)
         return positions
 

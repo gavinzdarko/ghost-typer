@@ -67,6 +67,11 @@ During table fill, avoid copying from other apps. Cell checks temporarily use
 the system clipboard. Revision checks protect copies observed during setup,
 but competing writes can still race with a clipboard write or restoration.
 
+Typo planning estimates fatigue from source characters consumed in the current
+session. It keeps a zero error rate at zero. This estimate does not predict
+runtime pause recovery, extra correction keystrokes, or random typing bursts;
+those still affect execution timing separately.
+
 ### Build as App (optional)
 
 To create a standalone `Ghost Typer.app`:
