@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from copy import deepcopy
 from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -407,17 +408,24 @@ class TypingProfile:
         return cls()
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TypingProfile":
-        """Build a TypingProfile from a flat or nested dict (e.g. AI JSON response)."""
+    def from_dict(cls, data: dict[str, Any], *, fallback_profile: "TypingProfile | None" = None) -> "TypingProfile":
+        """Validate an AI profile, optionally falling back when no field is usable.
+
+        A valid sparse object still starts from stock defaults. The configured
+        fallback applies only when validation accepts no recognized field.
+        """
         profile = cls()
-        _apply_dict_to_dataclass(profile, data)
+        accepted = _apply_dict_to_dataclass(profile, data)
+        if not accepted and fallback_profile is not None:
+            return deepcopy(fallback_profile)
         return profile
 
 
-def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
-    """Accept only well-typed, bounded profile values from untrusted AI JSON."""
+def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> bool:
+    """Apply safe AI values and report whether any recognized field was accepted."""
     if not isinstance(data, dict):
-        return
+        return False
+    accepted = set()
     for spec in fields(obj):
         key = spec.name
         if key not in data:
@@ -431,15 +439,19 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
             integer = isinstance(current, IntRange)
             floor = .05 if "multiplier" in key else 0
             ceiling = 10 if "multiplier" in key else min(900, max(1, current.max * 3))
-            if (_profile_number(lo, integer=integer) and _profile_number(hi, integer=integer)
+            if (("min" in value or "max" in value)
+                    and _profile_number(lo, integer=integer) and _profile_number(hi, integer=integer)
                     and floor <= lo <= hi <= ceiling):
                 setattr(obj, key, type(current)(lo, hi))
+                accepted.add(key)
         elif is_dataclass(current):
             if isinstance(value, dict):
-                _apply_dict_to_dataclass(current, value)
+                if _apply_dict_to_dataclass(current, value):
+                    accepted.add(key)
         elif isinstance(current, bool):
             if isinstance(value, bool):
                 setattr(obj, key, value)
+                accepted.add(key)
         elif isinstance(current, (int, float)):
             if not _profile_number(value, integer=isinstance(current, int)):
                 continue
@@ -463,9 +475,11 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
             strictly_positive = key in {"progress_report_frequency", "revisit_length_boost_divisor", "chars_per_screen"}
             if lower <= value <= upper and (not strictly_positive or value > 0):
                 setattr(obj, key, value)
+                accepted.add(key)
         elif isinstance(current, str):
             if isinstance(value, str):
                 setattr(obj, key, value[:2000])
+                accepted.add(key)
         elif isinstance(current, list):
             if not isinstance(value, list) or len(value) > 1000:
                 continue
@@ -473,11 +487,13 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
                 if (len(value) == 2 and all(_profile_number(v) and 0 <= v <= 10000 for v in value)
                         and sum(value) > 0):
                     setattr(obj, key, value)
+                    accepted.add(key)
             elif key == "word_speed_map":
                 # This metadata is not consumed as timing input by the engine.
                 continue
             elif all(isinstance(v, str) for v in value):
                 setattr(obj, key, value)
+                accepted.add(key)
         elif isinstance(current, dict) and isinstance(value, dict):
             allowed = {k: v for k, v in value.items()
                        if k in current and _profile_number(v) and 0 <= v <= 10000}
@@ -485,8 +501,12 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
                 candidate = {**current, **allowed}
                 if sum(candidate.values()) > 0:
                     setattr(obj, key, candidate)
+                    if allowed:
+                        accepted.add(key)
             else:
                 current.update({k: min(v, 1) for k, v in allowed.items()})
+                if allowed:
+                    accepted.add(key)
     # Cross-field invariants consumed by randint() and delay clamping.
     for low, high in (("delay_clamp_min", "delay_clamp_max"),
                       ("thinking_pause_clamp_min", "thinking_pause_clamp_max"),
@@ -495,6 +515,9 @@ def _apply_dict_to_dataclass(obj: Any, data: dict[str, Any]) -> None:
             defaults = type(obj)()
             setattr(obj, low, getattr(defaults, low))
             setattr(obj, high, getattr(defaults, high))
+            accepted.discard(low)
+            accepted.discard(high)
+    return bool(accepted)
 
 
 def _profile_number(value: Any, *, integer: bool = False) -> bool:

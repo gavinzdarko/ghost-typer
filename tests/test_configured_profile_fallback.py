@@ -1,5 +1,6 @@
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -66,3 +67,45 @@ def test_real_generator_failures_preserve_the_personal_profile(failure, rebuild)
         assert generator._client.messages.create.call_count == 2  # One call per session, no retry.
     finally:
         target._profile_executor.shutdown(wait=True)
+
+
+@pytest.mark.parametrize('payload', [
+    {}, {'unknown': 123}, {'keystroke': {}},
+    {'keystroke': {'finger_pinky_multiplier': 'invalid'}},
+    {'peek': {'pause_duration': {'unknown': 2}}},
+    {'mistakes': {'type_weights': {'unknown': 5}}},
+    {'keystroke': {'delay_clamp_min': .5, 'delay_clamp_max': .1}},
+])
+def test_unusable_profile_objects_preserve_an_independent_personal_baseline(payload):
+    target = app()
+    generator = target.ai_profile_generator
+    generator._enabled = True
+    generator._client = Mock()
+    generator._client.messages.create.return_value = SimpleNamespace(
+        stop_reason='end_turn', content=[SimpleNamespace(text=json.dumps(payload))])
+    profile = generator.generate_profile('hello')
+    assert profile.persona_description == 'Calibrated personal profile'
+    assert profile.keystroke.finger_pinky_multiplier == 1.7
+    profile.keystroke.finger_pinky_multiplier = 3
+    assert generator.generate_profile('again').keystroke.finger_pinky_multiplier == 1.7
+
+
+@pytest.mark.parametrize('payload', [
+    {'persona_description': 'New persona'},
+    {'keystroke': {'finger_pinky_multiplier': 1.18}},
+    {'unknown': True, 'keystroke': {'finger_pinky_multiplier': 'invalid'},
+     'energy_level': .8},
+])
+def test_valid_sparse_profile_objects_keep_the_existing_stock_default_contract(payload):
+    target = app()
+    generator = target.ai_profile_generator
+    generator._enabled = True
+    generator._client = Mock()
+    generator._client.messages.create.return_value = SimpleNamespace(
+        stop_reason='end_turn', content=[SimpleNamespace(text=json.dumps(payload))])
+    expected = TypingProfile.from_dict(payload)
+    profile = generator.generate_profile('hello')
+    assert profile == expected
+    assert profile.keystroke.finger_pinky_multiplier == 1.18
+    profile.keystroke.finger_pinky_multiplier = 3
+    assert generator.generate_profile('again') == expected
