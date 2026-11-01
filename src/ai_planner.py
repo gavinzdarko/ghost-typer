@@ -1106,7 +1106,7 @@ class AIProfileGenerator:
 
             data = json.loads(response_text)
             if isinstance(data, dict):
-                profile = TypingProfile.from_dict(data)
+                profile = TypingProfile.from_dict(data, fallback_profile=self._fallback_profile)
                 logger.info("Generated AI typing profile: %s", profile.persona_description)
                 return profile
 
