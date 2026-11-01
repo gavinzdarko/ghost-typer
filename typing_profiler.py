@@ -464,11 +464,16 @@ class TypingAnalyzer:
             if first_third and last_third:
                 first_avg = statistics.mean(first_third)
                 last_avg = statistics.mean(last_third)
-                if first_avg > 0:
+                if first_avg > 0 and last_avg > 0:
                     slowdown = (first_avg - last_avg) / first_avg
                     if slowdown > 0.03:
                         fatigue_detected = True
-                        fatigue_rate = slowdown / max(total_duration, 1) * 10
+                        # Playback adds this coefficient per typed character,
+                        # and scales delay by (1 + fatigue). Convert a WPM
+                        # decrease to a delay increase, then spread it across
+                        # the recorded character count. This is a session-level
+                        # estimate; runtime pauses and recovery still apply.
+                        fatigue_rate = (first_avg / last_avg - 1) / max(total_chars, 1)
 
         # --- Per-char-class timing multipliers ---
         char_class_multipliers = {}
@@ -525,7 +530,8 @@ class TypingAnalyzer:
             "pause_duration_min": round(thinking_min, 2),
             "pause_duration_max": round(thinking_max, 2),
             "fatigue_enabled": fatigue_detected,
-            "fatigue_rate": round(fatigue_rate, 5),
+            # Long recordings can yield useful coefficients below 0.00001.
+            "fatigue_rate": fatigue_rate,
             "burst_typing_enabled": burst_enabled,
             "burst_length_min": max(3, burst_len_min),
             "burst_length_max": max(burst_len_max, burst_len_min + 3),
