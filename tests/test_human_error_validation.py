@@ -41,6 +41,40 @@ def test_similar_paragraph_cannot_hide_a_deleted_sentence_or_long_passage(remove
     assert process(text, {"modified_text": prefix}) == (text, [])
 
 
+@pytest.mark.parametrize('text, modified', [
+    ('The source says we will meet tomorrow at the normal time.',
+     'The source says we will meet tomorrow at the normal time. Do it.'),
+    ('The cat is sleeping on the couch.',
+     'The cat is sleeping. Hi. on the couch.'),
+    ('The rest of this paragraph stays exactly as written. ' * 12,
+     'The rest of this paragraph stays exactly as written. ' * 11 +
+     'An extra sentence! The rest of this paragraph stays exactly as written. '),
+])
+def test_similar_text_cannot_hide_an_added_sentence(text, modified):
+    assert process(text, {'modified_text': modified}) == (text, [])
+
+
+@pytest.mark.parametrize('addition', [
+    ' "Go."', ' “Go.”', ' (Go.)', " 'Go.'", ' «Go.»', ' ‹Go.›',
+    ' [Go.]', ' {Go.}', ' `Go.`', ' 「Go.」', ' Go... Then?',
+])
+def test_closing_punctuation_cannot_hide_an_added_sentence(addition):
+    text = 'The source says we will meet tomorrow at the normal time.'
+    assert process(text, {'modified_text': text + addition}) == (text, [])
+
+
+@pytest.mark.parametrize('text, modified', [
+    ('The student buys three items from the store before the weekend.',
+     'The student buys 3.14 items from the store before the weekend.'),
+    ('The student does not know because they are tired.',
+     "The student doesn't know because they are tired."),
+    ('After school the student goes home for the evening.',
+     'After school, the student goes home for the evening.'),
+])
+def test_local_decimal_apostrophe_and_comma_edits_remain_accepted(text, modified):
+    assert process(text, {'modified_text': modified}) == (modified, [])
+
+
 def test_small_edit_in_long_repeated_line_only_compares_changed_window():
     from unittest.mock import patch
     from difflib import SequenceMatcher
