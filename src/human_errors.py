@@ -320,7 +320,9 @@ class HumanErrors:
                 # a sentence or substituting a large section of clipboard text.
                 if max(len(removed), len(inserted)) > 24:
                     return False
-                if any(re.search(r"\w[^.!?]*[.!?](?:\s|$)", edit)
+                # A closing quote/bracket also ends a sentence. Requiring
+                # whitespace here would admit additions such as ' "Go."'.
+                if any(re.search(r"\w[^.!?]*[.!?](?!\w)", edit)
                        for edit in (removed, inserted)):
                     return False
             # Preserve paragraph indentation and separators exactly.

@@ -54,6 +54,15 @@ def test_similar_text_cannot_hide_an_added_sentence(text, modified):
     assert process(text, {'modified_text': modified}) == (text, [])
 
 
+@pytest.mark.parametrize('addition', [
+    ' "Go."', ' “Go.”', ' (Go.)', " 'Go.'", ' «Go.»', ' ‹Go.›',
+    ' [Go.]', ' {Go.}', ' `Go.`', ' 「Go.」', ' Go... Then?',
+])
+def test_closing_punctuation_cannot_hide_an_added_sentence(addition):
+    text = 'The source says we will meet tomorrow at the normal time.'
+    assert process(text, {'modified_text': text + addition}) == (text, [])
+
+
 def test_small_edit_in_long_repeated_line_only_compares_changed_window():
     from unittest.mock import patch
     from difflib import SequenceMatcher
