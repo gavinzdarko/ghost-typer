@@ -316,11 +316,12 @@ class HumanErrors:
                 if any(not char.isprintable() for char in removed + inserted):
                     return False
                 # Grammar and punctuation mistakes are small local edits. A
-                # similar surrounding paragraph cannot justify losing a sentence
-                # or substituting a large section of clipboard text.
+                # similar surrounding paragraph cannot justify adding or losing
+                # a sentence or substituting a large section of clipboard text.
                 if max(len(removed), len(inserted)) > 24:
                     return False
-                if re.search(r"\w[^.!?]*[.!?](?:\s|$)", removed):
+                if any(re.search(r"\w[^.!?]*[.!?](?:\s|$)", edit)
+                       for edit in (removed, inserted)):
                     return False
             # Preserve paragraph indentation and separators exactly.
             for pattern in (r"^\s*", r"\s*$"):
