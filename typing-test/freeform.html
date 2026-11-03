@@ -263,7 +263,10 @@ function showResults() {
 }
 
 function buildJSON() {
-  flushBurst();
+  // Export a snapshot without splitting or discarding a burst still being typed.
+  const snapshotBursts = currentBurst.length >= 3
+    ? [...bursts, { len: currentBurst.length, avg: avg(currentBurst) }]
+    : bursts;
   const t = elapsedSeconds();
   const words = area.value.trim().split(/\s+/).filter(Boolean).length;
   const wpm = standardWpm(area.value, t);
@@ -276,7 +279,7 @@ function buildJSON() {
     iki: { mean: Math.round(avg(ikis)), median: Math.round(med(ikis)), std: Math.round(std(ikis)) },
     backspace_delay: { mean: Math.round(avg(bsIkis)), median: Math.round(med(bsIkis)) },
     pauses: { count: pauses.length, avg_ms: Math.round(avg(pauses)) },
-    bursts: { count: bursts.length, avg_len: Math.round(avg(bursts.map(b=>b.len))), avg_iki: Math.round(avg(bursts.map(b=>b.avg))) },
+    bursts: { count: snapshotBursts.length, avg_len: Math.round(avg(snapshotBursts.map(b=>b.len))), avg_iki: Math.round(avg(snapshotBursts.map(b=>b.avg))) },
     fast_digraphs: diSorted.slice(0,10).map(([d,ms])=>({pair:d,ms})),
     slow_digraphs: diSorted.slice(-10).reverse().map(([d,ms])=>({pair:d,ms})),
     raw_text: area.value,
