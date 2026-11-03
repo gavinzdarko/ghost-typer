@@ -63,6 +63,18 @@ def test_closing_punctuation_cannot_hide_an_added_sentence(addition):
     assert process(text, {'modified_text': text + addition}) == (text, [])
 
 
+@pytest.mark.parametrize('text, modified', [
+    ('The student buys three items from the store before the weekend.',
+     'The student buys 3.14 items from the store before the weekend.'),
+    ('The student does not know because they are tired.',
+     "The student doesn't know because they are tired."),
+    ('After school the student goes home for the evening.',
+     'After school, the student goes home for the evening.'),
+])
+def test_local_decimal_apostrophe_and_comma_edits_remain_accepted(text, modified):
+    assert process(text, {'modified_text': modified}) == (modified, [])
+
+
 def test_small_edit_in_long_repeated_line_only_compares_changed_window():
     from unittest.mock import patch
     from difflib import SequenceMatcher
