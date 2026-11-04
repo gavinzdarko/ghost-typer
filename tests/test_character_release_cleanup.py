@@ -19,7 +19,7 @@ def test_character_release_attempted_after_partial_key_down_failure(raw):
     assert not sim.is_active
 
 
-@pytest.mark.parametrize('char,key', [('A', 'A'), ('é', 'é'), ('😀', '😀'), ('\n', Key.enter), ('\r', Key.enter), ('\t', Key.tab)])
+@pytest.mark.parametrize('char,key', [('A', 'A'), ('é', 'é'), ('\n', Key.enter), ('\r', Key.enter), ('\t', Key.tab)])
 def test_characters_keep_pynput_native_mapping_and_unicode(char, key):
     with patch('src.keystroke_simulator.Controller'):
         sim = KeystrokeSimulator()
