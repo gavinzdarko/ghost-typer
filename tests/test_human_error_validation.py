@@ -54,6 +54,23 @@ def test_similar_text_cannot_hide_an_added_sentence(text, modified):
     assert process(text, {'modified_text': modified}) == (text, [])
 
 
+@pytest.mark.parametrize('sentence, addition', [
+    ('Go home.', 'Go. '),
+    ('We agree.', 'We! '),
+    ('Is it ready?', 'Is? '),
+    ('Go home.', '"Go." '),
+])
+@pytest.mark.parametrize('remove', [False, True])
+@pytest.mark.parametrize('opening', ['', 'The opening sentence remains unchanged. '])
+def test_shared_sentence_edges_cannot_hide_added_or_removed_sentences(sentence, addition, remove, opening):
+    text = sentence + ' The remainder of this original paragraph stays unchanged for the test.'
+    modified = addition + text
+    text, modified = opening + text, opening + modified
+    if remove:
+        text, modified = modified, text
+    assert process(text, {'modified_text': modified}) == (text, [])
+
+
 @pytest.mark.parametrize('addition', [
     ' "Go."', ' “Go.”', ' (Go.)', " 'Go.'", ' «Go.»', ' ‹Go.›',
     ' [Go.]', ' {Go.}', ' `Go.`', ' 「Go.」', ' Go... Then?',
@@ -70,6 +87,9 @@ def test_closing_punctuation_cannot_hide_an_added_sentence(addition):
      "The student doesn't know because they are tired."),
     ('After school the student goes home for the evening.',
      'After school, the student goes home for the evening.'),
+    ('The student will walk home', 'The student will walk home.'),
+    ('The student will walk home.', 'The student will walk home'),
+    ('The student does not know.', 'The student dont know.'),
 ])
 def test_local_decimal_apostrophe_and_comma_edits_remain_accepted(text, modified):
     assert process(text, {'modified_text': modified}) == (modified, [])

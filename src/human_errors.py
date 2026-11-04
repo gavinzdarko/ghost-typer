@@ -322,8 +322,20 @@ class HumanErrors:
                     return False
                 # A closing quote/bracket also ends a sentence. Requiring
                 # whitespace here would admit additions such as ' "Go."'.
+                # Trimming/matching may share the first word of a newly
+                # inserted sentence: 'Go home.' -> 'Go. Go home.' leaves
+                # only '. Go' as the insertion. Include its preceding word
+                # character so alignment cannot hide the sentence boundary.
+                # Pure punctuation edits still use the original local rule.
+                contexts = []
+                for text, offset, edit in ((source, prefix + start, removed),
+                                           (result, prefix + result_start, inserted)):
+                    if re.search(r"\w", edit) and offset and re.match(r"\w", text[offset - 1]):
+                        contexts.append(text[offset - 1] + edit)
+                    else:
+                        contexts.append(edit)
                 if any(re.search(r"\w[^.!?]*[.!?](?!\w)", edit)
-                       for edit in (removed, inserted)):
+                       for edit in contexts):
                     return False
             # Preserve paragraph indentation and separators exactly.
             for pattern in (r"^\s*", r"\s*$"):
