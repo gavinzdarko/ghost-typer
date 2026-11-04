@@ -473,7 +473,10 @@ class TypingAnalyzer:
                         # decrease to a delay increase, then spread it across
                         # the recorded character count. This is a session-level
                         # estimate; runtime pauses and recovery still apply.
-                        fatigue_rate = (first_avg / last_avg - 1) / max(total_chars, 1)
+                        # Idle-heavy recordings can produce extreme ratios.
+                        # Keep the coefficient within Settings' supported
+                        # range so importing does not replace it with a default.
+                        fatigue_rate = min(1.0, (first_avg / last_avg - 1) / max(total_chars, 1))
 
         # --- Per-char-class timing multipliers ---
         char_class_multipliers = {}

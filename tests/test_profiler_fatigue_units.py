@@ -44,6 +44,15 @@ def test_long_recording_keeps_a_small_nonzero_coefficient():
     assert Settings.from_dict(settings).fatigue_rate == settings['fatigue_rate']
 
 
+def test_idle_heavy_recording_exports_a_supported_coefficient_without_default_fallback():
+    events = [KeyEvent(i / 10, 'a') for i in range(100)]
+    events += [KeyEvent(34, 'b'), KeyEvent(35, 'c')]
+    settings = TypingAnalyzer(events).analyze()['ghost_typer_settings']
+    assert settings['fatigue_enabled']
+    assert settings['fatigue_rate'] == 1
+    assert Settings.from_dict(settings).fatigue_rate == settings['fatigue_rate']
+
+
 @pytest.mark.parametrize('speeds', [[100] * 6, [80, 80, 80, 100, 100, 100],
                                     [100, 100, 100, 0, 0, 0]])
 def test_stable_improving_and_idle_windows_do_not_export_fatigue(speeds):
