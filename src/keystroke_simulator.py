@@ -7,6 +7,7 @@ sees them as human typing.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from threading import Event, Lock
 
@@ -159,10 +160,34 @@ class KeystrokeSimulator:
 
         Controller.type performs these same public press/release calls without
         a finally block. A backend may fail after posting the key-down event.
-        Pass Unicode characters intact so pynput retains its native handling.
+        Quartz counts UTF-16 units, unlike pynput's supplementary-character
+        path, which uses Python's code-point length and truncates surrogates.
         """
+        if sys.platform == "darwin" and any(ord(c) > 0xFFFF for c in char):
+            self._do_unicode_char(char)
+            return
         key = {"\n": Key.enter, "\r": Key.enter, "\t": Key.tab}.get(char, char)
         self._do_press_release(key)
+
+    def _do_unicode_char(self, char: str) -> None:
+        """Post a complete supplementary character under the event lock."""
+        import Quartz
+
+        units = len(char.encode("utf-16-le")) // 2
+        events = []
+        for pressed in (True, False):
+            event = Quartz.CGEventCreateKeyboardEvent(None, 0, pressed)
+            if event is None:
+                raise RuntimeError("Could not create a Unicode keyboard event")
+            Quartz.CGEventSetFlags(event, 0)
+            Quartz.CGEventKeyboardSetUnicodeString(event, units, char)
+            events.append(event)
+        # Prepare key-up before posting key-down, and attempt release even
+        # when the backend raises after posting the first event.
+        try:
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, events[0])
+        finally:
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, events[1])
 
     def press_key(self, key_name: str) -> None:
         """Press and release a special key by name (e.g. 'enter', 'tab')."""
