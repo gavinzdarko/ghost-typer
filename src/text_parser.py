@@ -174,6 +174,12 @@ class TextParser:
 
     @staticmethod
     def _inline_values(style: str, prop: str):
+        for name, value in TextParser._inline_declarations(style):
+            if name == prop:
+                yield value
+
+    @staticmethod
+    def _inline_declarations(style: str):
         """Read declarations without treating comments/strings as CSS rules.
 
         Comments separate tokens rather than joining identifiers. Quoted and
@@ -211,15 +217,15 @@ class TextParser:
                 parts.append(char)
             elif char == ";" and not closing:
                 declaration = "".join(parts).partition(":")
-                if declaration[0].strip().lower() == prop:
-                    yield declaration[2]
+                if declaration[1]:
+                    yield declaration[0].strip().lower(), declaration[2]
                 parts.clear()
             else:
                 parts.append(char)
             index += 1
         declaration = "".join(parts).partition(":")
-        if declaration[0].strip().lower() == prop:
-            yield declaration[2]
+        if declaration[1]:
+            yield declaration[0].strip().lower(), declaration[2]
 
     @staticmethod
     def _inline_keyword(style: str, prop: str, keywords: set[str]) -> Optional[str]:
@@ -339,6 +345,41 @@ class TextParser:
         return "list-item" in display.split()
 
     @staticmethod
+    def _inline_list_marker_type(style: str, keywords: set[str]) -> Optional[str]:
+        """Resolve literal shorthand/longhand declarations in the same cascade.
+
+        Shorthands reset omitted types to disc. Image functions and custom
+        counter styles remain outside this literal marker model.
+        """
+        globals_ = {"inherit", "initial", "unset", "revert", "revert-layer"}
+        candidates = []
+        for name, raw in TextParser._inline_declarations(style):
+            if name not in ("list-style", "list-style-type"):
+                continue
+            important = bool(re.search(r"!\s*important\s*$", raw, re.IGNORECASE))
+            value = " ".join(re.sub(r"!\s*important\s*$", "", raw, flags=re.IGNORECASE).lower().split())
+            if value in globals_:
+                marker = value
+            elif name == "list-style-type":
+                if value not in keywords:
+                    continue
+                marker = value
+            else:
+                words = value.split()
+                types = [word for word in words if word in keywords - {"none"}]
+                positions = [word for word in words if word in {"inside", "outside"}]
+                none_count = words.count("none")
+                if (not words or len(types) > 1 or len(positions) > 1
+                        or none_count > (1 if types else 2)
+                        or len(types) + len(positions) + none_count != len(words)):
+                    continue
+                marker = types[0] if types else ("none" if none_count else "disc")
+            candidates.append((important, marker))
+        if not candidates:
+            return None
+        return max(enumerate(candidates), key=lambda item: (item[1][0], item[0]))[1][1]
+
+    @staticmethod
     def _list_marker_type(node: Tag) -> str:
         """Resolve supported inline marker literals and HTML presentational hints.
 
@@ -352,7 +393,7 @@ class TextParser:
         hints = {"1": "decimal", "a": "lower-alpha", "A": "upper-alpha",
                  "i": "lower-roman", "I": "upper-roman"}
         while isinstance(node, Tag):
-            value = TextParser._inline_keyword(node.get("style", ""), "list-style-type", keywords)
+            value = TextParser._inline_list_marker_type(node.get("style", ""), keywords)
             if value == "initial":
                 return "disc"
             if value in ("inherit", "unset"):
