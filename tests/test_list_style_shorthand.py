@@ -1,10 +1,12 @@
+from html import escape
+
 import pytest
 
 from src.text_parser import TextParser
 
 
 def text(style, *, tag='ul'):
-    source = f'<{tag} style="{style}"><li>A</li><li>B</li></{tag}>'
+    source = f'<{tag} style="{escape(style, quote=True)}"><li>A</li><li>B</li></{tag}>'
     return ''.join(segment.text for segment in TextParser().parse(source, is_html=True))
 
 
