@@ -334,7 +334,10 @@ class HumanErrors:
                         contexts.append(text[offset - 1] + edit)
                     else:
                         contexts.append(edit)
-                if any(re.search(r"\w[^.!?]*[.!?](?!\w)", edit)
+                # Missing separator spaces do not make an added sentence a
+                # grammar typo. Only a period between decimal digits needs
+                # to be exempt from the sentence-punctuation check.
+                if any(re.search(r"\w[^.!?]*(?:[!?]|(?<!\d)\.|\.(?!\d))", edit)
                        for edit in contexts):
                     return False
             # Preserve paragraph indentation and separators exactly.
