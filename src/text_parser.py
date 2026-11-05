@@ -318,14 +318,18 @@ class TextParser:
 
     @staticmethod
     def _is_hidden(node: Tag) -> bool:
-        if node.has_attr("hidden"):
+        # Ordinary hidden is a UA display default that author CSS can
+        # override. Until-found uses content-visibility instead, so changing
+        # display alone must not expose its skipped contents.
+        if str(node.get("hidden", "")).lower() == "until-found":
             return True
-        closed_dialog = node.name == "dialog" and not node.has_attr("open")
+        default_hidden = node.has_attr("hidden") or (
+            node.name == "dialog" and not node.has_attr("open"))
         display = TextParser._inline_display(node)
         if display is None:
-            return closed_dialog
+            return default_hidden
         if display in ("revert", "revert-layer"):
-            return closed_dialog
+            return default_hidden
         return display == "none"
 
     @staticmethod
