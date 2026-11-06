@@ -21,7 +21,9 @@ def process(source, modified):
 
 @pytest.mark.parametrize('word', ['"Run"', "'Run'", '“Run”', '«Run»', '(Run)',
                                    '[Run]', '「Run」', '《Run》', '`Run`',
-                                   '＂Run＂', '＇Run＇', '｀Run｀', '„Run“', '⹂Run⹂'])
+                                   '＂Run＂', '＇Run＇', '｀Run｀', '„Run“', '⹂Run⹂',
+                                   '"Run\u0301"', '“क्यों”', 'cafe\u0301', 'नहीं',
+                                   'का', 'a\u20dd'])
 @pytest.mark.parametrize('separator', ['', ' '])
 @pytest.mark.parametrize('remove', [False, True])
 @pytest.mark.parametrize('opening', ['', 'The opening remains unchanged. '])

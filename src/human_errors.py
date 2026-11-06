@@ -345,7 +345,7 @@ class HumanErrors:
                     return False
                 # Matching may share an added sentence's first word, leaving
                 # only '. Go' or '. "Run"' as the edit. Recover preceding word
-                # context across quote/bracket delimiters and whitespace;
+                # context across combining marks, delimiters and whitespace;
                 # stop at other punctuation so a complete preceding sentence
                 # cannot make an ordinary local edit look like a new sentence.
                 # Pure punctuation edits still use the original local rule.
@@ -358,7 +358,8 @@ class HumanErrors:
                             previous = text[context_start - 1]
                             if (previous.isspace()
                                     or unicodedata.normalize("NFKC", previous) in "\"'`"
-                                    or unicodedata.category(previous) in {"Ps", "Pe", "Pi", "Pf"}):
+                                    or unicodedata.category(previous) in {
+                                        "Ps", "Pe", "Pi", "Pf", "Mn", "Mc", "Me"}):
                                 context_start -= 1
                             else:
                                 break
