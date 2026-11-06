@@ -343,20 +343,29 @@ class HumanErrors:
                 # a sentence or substituting a large section of clipboard text.
                 if max(len(removed), len(inserted)) > 24:
                     return False
-                # A closing quote/bracket also ends a sentence. Requiring
-                # whitespace here would admit additions such as ' "Go."'.
-                # Trimming/matching may share the first word of a newly
-                # inserted sentence: 'Go home.' -> 'Go. Go home.' leaves
-                # only '. Go' as the insertion. Include its preceding word
-                # character so alignment cannot hide the sentence boundary.
+                # Matching may share an added sentence's first word, leaving
+                # only '. Go' or '. "Run"' as the edit. Recover preceding word
+                # context across combining marks, delimiters and whitespace;
+                # stop at other punctuation so a complete preceding sentence
+                # cannot make an ordinary local edit look like a new sentence.
                 # Pure punctuation edits still use the original local rule.
                 contexts = []
                 for text, offset, edit in ((source, prefix + start, removed),
                                            (result, prefix + result_start, inserted)):
-                    if re.search(r"\w", edit) and offset and re.match(r"\w", text[offset - 1]):
-                        contexts.append(text[offset - 1] + edit)
-                    else:
-                        contexts.append(edit)
+                    context_start = offset
+                    if re.search(r"\w", edit):
+                        while context_start:
+                            previous = text[context_start - 1]
+                            if (previous.isspace()
+                                    or unicodedata.normalize("NFKC", previous) in "\"'`"
+                                    or unicodedata.category(previous) in {
+                                        "Ps", "Pe", "Pi", "Pf", "Mn", "Mc", "Me"}):
+                                context_start -= 1
+                            else:
+                                break
+                        if context_start and re.match(r"\w", text[context_start - 1]):
+                            context_start -= 1
+                    contexts.append(text[context_start:offset] + edit)
                 # Sentence edits remain unsafe across writing systems. Match
                 # compatibility forms (including ellipses/fullwidth marks) on
                 # a normalized copy only; keep output and decimal edits intact.
