@@ -323,13 +323,25 @@ class TextParser:
         return max(enumerate(valid), key=lambda item: (item[1][0], item[0]))[1][1]
 
     @staticmethod
+    def _content_visibility_mode(node: Tag) -> str:
+        """Resolve literal overrides of the hidden-until-found UA default."""
+        mode = TextParser._inline_keyword(node.get("style", ""), "content-visibility",
+                                          {"visible", "hidden", "auto"})
+        if mode == "inherit":
+            return (TextParser._content_visibility_mode(node.parent)
+                    if isinstance(node.parent, Tag) else "visible")
+        if mode is None or mode in ("revert", "revert-layer"):
+            return "hidden" if str(node.get("hidden", "")).lower() == "until-found" else "visible"
+        return "visible" if mode in ("initial", "unset") else mode
+
+    @staticmethod
     def _is_hidden(node: Tag) -> bool:
-        # Ordinary hidden is a UA display default that author CSS can
-        # override. Until-found uses content-visibility instead, so changing
-        # display alone must not expose its skipped contents.
-        if str(node.get("hidden", "")).lower() == "until-found":
+        # Ordinary hidden is a UA display default. Until-found instead defaults
+        # to content-visibility:hidden, which author CSS can also override.
+        until_found = str(node.get("hidden", "")).lower() == "until-found"
+        if until_found and TextParser._content_visibility_mode(node) == "hidden":
             return True
-        default_hidden = node.has_attr("hidden") or (
+        default_hidden = (node.has_attr("hidden") and not until_found) or (
             node.name == "dialog" and not node.has_attr("open"))
         display = TextParser._inline_display(node)
         if display is None:
