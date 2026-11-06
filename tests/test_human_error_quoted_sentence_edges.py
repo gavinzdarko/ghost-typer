@@ -20,7 +20,8 @@ def process(source, modified):
 
 
 @pytest.mark.parametrize('word', ['"Run"', "'Run'", '“Run”', '«Run»', '(Run)',
-                                   '[Run]', '「Run」', '《Run》', '`Run`'])
+                                   '[Run]', '「Run」', '《Run》', '`Run`',
+                                   '＂Run＂', '＇Run＇', '｀Run｀', '„Run“', '⹂Run⹂'])
 @pytest.mark.parametrize('separator', ['', ' '])
 @pytest.mark.parametrize('remove', [False, True])
 @pytest.mark.parametrize('opening', ['', 'The opening remains unchanged. '])
