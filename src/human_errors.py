@@ -20,6 +20,28 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+# Unicode 17 Sentence_Terminal, excluding the decimal-sensitive ASCII period.
+# https://www.unicode.org/Public/17.0.0/ucd/PropList.txt
+_SENTENCE_TERMINALS = (
+    r"\u0021\u003f\u0589\u061d-\u061f\u06d4\u0700-\u0702\u07f9\u0837\u0839\u083d-\u083e"
+    r"\u0964-\u0965\u104a-\u104b\u1362\u1367-\u1368\u166e\u1735-\u1736\u17d4-\u17d5\u1803"
+    r"\u1809\u1944-\u1945\u1aa8-\u1aab\u1b4e-\u1b4f\u1b5a-\u1b5b\u1b5e-\u1b5f\u1b7d-\u1b7f"
+    r"\u1c3b-\u1c3c\u1c7e-\u1c7f\u2024\u203c-\u203d\u2047-\u2049\u2cf9-\u2cfb\u2e2e\u2e3c"
+    r"\u2e53-\u2e54\u3002\ua4ff\ua60e-\ua60f\ua6f3\ua6f7\ua876-\ua877\ua8ce-\ua8cf\ua92f"
+    r"\ua9c8-\ua9c9\uaa5d-\uaa5f\uaaf0-\uaaf1\uabeb\ufe12\ufe15-\ufe16\ufe52\ufe56-\ufe57"
+    r"\uff01\uff0e\uff1f\uff61\U00010a56-\U00010a57\U00010f55-\U00010f59"
+    r"\U00010f86-\U00010f89\U00011047-\U00011048\U000110be-\U000110c1\U00011141-\U00011143"
+    r"\U000111c5-\U000111c6\U000111cd\U000111de-\U000111df\U00011238-\U00011239"
+    r"\U0001123b-\U0001123c\U000112a9\U000113d4-\U000113d5\U0001144b-\U0001144c"
+    r"\U000115c2-\U000115c3\U000115c9-\U000115d7\U00011641-\U00011642\U0001173c-\U0001173e"
+    r"\U00011944\U00011946\U00011a42-\U00011a43\U00011a9b-\U00011a9c\U00011c41-\U00011c42"
+    r"\U00011ef7-\U00011ef8\U00011f43-\U00011f44\U00016a6e-\U00016a6f\U00016af5"
+    r"\U00016b37-\U00016b38\U00016b44\U00016d6e-\U00016d6f\U00016e98\U0001bc9f\U0001da88"
+)
+_SENTENCE_EDIT_RE = re.compile(
+    rf"\w[^.{_SENTENCE_TERMINALS}]*(?:[{_SENTENCE_TERMINALS}]|(?<!\d)\.|\.(?!\d))"
+)
+
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 HUMAN_ERRORS_SYSTEM_PROMPT = """\
@@ -342,10 +364,10 @@ class HumanErrors:
                         if context_start and re.match(r"\w", text[context_start - 1]):
                             context_start -= 1
                     contexts.append(text[context_start:offset] + edit)
-                # Missing separator spaces do not make an added sentence a
-                # grammar typo. Only a period between decimal digits needs
-                # to be exempt from the sentence-punctuation check.
-                if any(re.search(r"\w[^.!?]*(?:[!?]|(?<!\d)\.|\.(?!\d))", edit)
+                # Sentence edits remain unsafe across writing systems. Match
+                # compatibility forms (including ellipses/fullwidth marks) on
+                # a normalized copy only; keep output and decimal edits intact.
+                if any(_SENTENCE_EDIT_RE.search(unicodedata.normalize("NFKC", edit))
                        for edit in contexts):
                     return False
             # Preserve paragraph indentation and separators exactly.
