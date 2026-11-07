@@ -115,9 +115,27 @@ for (const event of ['paste', 'drop']) {
   area.addEventListener(event, e => e.preventDefault());
 }
 
+// Cursor edits, focus changes and composition interrupt adjacent typing.
+// Preserve completed samples, but never train a digraph or a backspace run
+// across an edit whose position and timing we did not record.
+function endTypingRun() {
+  flushBurst();
+  prevChar = '';
+  lastTime = 0;
+  lastBsTime = 0;
+}
+
+for (const event of ['pointerdown', 'blur', 'compositionstart']) {
+  area.addEventListener(event, endTypingRun);
+}
+
 area.addEventListener('keydown', e => {
-  if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
-  if (e.key.length !== 1 && e.key !== 'Backspace' && e.key !== 'Enter') return;
+  if (finished) return;
+  if (e.ctrlKey || e.metaKey || e.isComposing) { endTypingRun(); return; }
+  if (e.key.length !== 1 && e.key !== 'Backspace' && e.key !== 'Enter') {
+    if (!['Shift', 'Alt', 'CapsLock'].includes(e.key)) endTypingRun();
+    return;
+  }
   const now = performance.now();
   if (!started) { started = true; startTime = now; startTimer(); }
   const iki = lastTime > 0 ? now - lastTime : 0;
