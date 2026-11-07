@@ -992,19 +992,26 @@ class Orchestrator:
 
         Returns the last character typed (for prev_char tracking).
         """
-        # Pause as if reconsidering
-        simulator.wait(engine.correction_pause_duration())
+        # The planner already included the reflex pause for a motor typo.
+        # Semantic revisions still need time to reconsider the wording.
+        if not action.motor_correction:
+            simulator.wait(engine.correction_pause_duration())
 
         # Delete back (accelerating)
         for i in range(action.delete_count):
             if self._cancel_event.is_set() or not simulator.is_active:
                 return ""
-            simulator.wait(engine.backspace_delay(nth_backspace=i))
+            delay = (engine.fast_loop_backspace_delay() if action.motor_correction
+                     else engine.backspace_delay(nth_backspace=i))
+            simulator.wait(delay)
             simulator.press_key("backspace")
             engine.on_backspace()
 
-        # Small pause before retyping
-        simulator.wait(engine.correction_pause_duration() * 0.3)
+        if action.motor_correction:
+            engine.on_error_corrected()
+        else:
+            # Small pause before retyping a semantic revision.
+            simulator.wait(engine.correction_pause_duration() * 0.3)
 
         # Execute new_actions (which may contain nested Rewrites)
         prev_char = engine.previous_visible_char

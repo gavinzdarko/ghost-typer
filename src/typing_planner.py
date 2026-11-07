@@ -1196,9 +1196,10 @@ class TypingPlanner:
             # Fast motor loop — fingers catch the mistake almost instantly
             actions.append(TypeText(text=typo_char))
             actions.append(Pause(duration=self.engine.fast_loop_pause()))
-            actions.append(Rewrite.simple(
+            actions.append(Rewrite(
                 delete_count=len(typo_char),
-                text=intended_char,
+                new_actions=[TypeText(text=intended_char)],
+                motor_correction=True,
                 description="Fast motor correction",
             ))
             return actions, 1, None

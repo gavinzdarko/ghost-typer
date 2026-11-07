@@ -531,6 +531,10 @@ class TypingEngine:
         """Feature 4: Quick motor correction pause (~100-200ms)."""
         return self._r(self.profile.correction.fast_loop_pause)
 
+    def fast_loop_backspace_delay(self) -> float:
+        """Use the profile's reflex timing for motor correction deletions."""
+        return self._r(self.profile.correction.fast_loop_backspace_delay)
+
     def slow_loop_search_pause(self, chars_back: int) -> float:
         """Feature 4: Slow cognitive correction — visual search time scales with distance."""
         p = self.profile

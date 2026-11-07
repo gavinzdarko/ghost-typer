@@ -662,6 +662,7 @@ class Rewrite(TypingAction):
 
     delete_count: int = 0
     new_actions: list[TypingAction] = field(default_factory=list)
+    motor_correction: bool = False
 
     @property
     def new_text(self) -> str:
