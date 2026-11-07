@@ -113,6 +113,15 @@ class TypingRecorder:
 
     @property
     def is_done(self) -> bool:
+        if not self._done and self._listener is not None and not self._listener.is_alive():
+            # pynput runs callbacks and event-tap setup on its own thread.
+            # Surface a dead listener instead of waiting forever for an ESC
+            # event that can no longer arrive. join also retrieves its error.
+            try:
+                self._listener.join(timeout=0)
+            except Exception as exc:
+                raise RuntimeError("The keyboard listener failed") from exc
+            raise RuntimeError("The keyboard listener stopped unexpectedly")
         return self._done
 
     def _on_press(self, key) -> None:
@@ -759,14 +768,18 @@ def main():
     print("-" * 60)
 
     recorder = TypingRecorder()
-    recorder.start()
 
     # Wait for ESC
     try:
+        recorder.start()
         while not recorder.is_done:
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass
+    except Exception:
+        print("  Could not record keyboard input. Check macOS Accessibility and "
+              "Input Monitoring permissions, then retry.")
+        sys.exit(1)
     finally:
         recorder.stop()
 
