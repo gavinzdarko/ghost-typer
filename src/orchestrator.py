@@ -38,7 +38,8 @@ from .notification_service import NotificationService
 from .settings_ui import DEFAULTS, load_settings_dict, save_settings_dict
 from .text_parser import TextParser
 from .typing_engine import TypingEngine
-from .typing_planner import PlanningCancelled, TypingPlanner
+from .typing_planner import FORMAT_SHORTCUTS, PlanningCancelled, TypingPlanner
+from .planned_text import PlannedText
 from .visual_verifier import VisualVerifier
 
 logger = logging.getLogger(__name__)
@@ -693,9 +694,6 @@ class Orchestrator:
                 len(seg.text.split()) for seg in segments if seg.text.strip()
             )
 
-            # Build the full intended text for verification later
-            intended_text = "".join(seg.text for seg in segments)
-
             # Notify start
             self.notification_service.notify_start(self._current_word_count)
 
@@ -752,16 +750,23 @@ class Orchestrator:
 
             # ── Step 4: Visual verification (optional) ──
             if self.visual_verifier.enabled:
-                self.state = OrchestratorState.VERIFYING
-                logger.info("Running visual verification...")
-                result = self.visual_verifier.verify(intended_text, cancel_event=self._cancel_event)
-                if self._cancel_event.is_set():
-                    return
-                logger.info("Verification: %s", result)
-                if not result.success:
+                # Permanent errors and intentional revisions can change the
+                # source. Compare OCR with what the completed plan should emit.
+                expected = PlannedText(ignored_shortcuts=FORMAT_SHORTCUTS.values()).apply(plan.actions)
+                if not expected.valid:
+                    logger.warning("Cannot reconstruct planned text for visual verification")
                     self.notification_service.notify_error(
-                        f"Verification: {result.message}"
+                        "Visual verification unavailable for this typing session"
                     )
+                else:
+                    self.state = OrchestratorState.VERIFYING
+                    logger.info("Running visual verification...")
+                    result = self.visual_verifier.verify(expected.text, cancel_event=self._cancel_event)
+                    if self._cancel_event.is_set():
+                        return
+                    logger.info("Verification: %s", result)
+                    if not result.success:
+                        self.notification_service.notify_error(f"Verification: {result.message}")
 
             # ── Step 5: Notify completion ──
             if self._cancel_event.is_set():
