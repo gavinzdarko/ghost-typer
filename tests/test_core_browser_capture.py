@@ -67,10 +67,10 @@ key('{input_id}', 'Shift', 250);
 key('{input_id}', 'ArrowLeft', 260);
 key('{input_id}', 'B', 300);
 assert.equal({counter}, 2);
-assert.deepEqual({intervals}, {'[]' if page == 'freeform.html' else '[100]'});
+assert.deepEqual({intervals}, []);
 key('{input_id}', 'Backspace', 400);
 key('{input_id}', 'c', 500);
-assert.deepEqual({intervals}, {'[]' if page == 'freeform.html' else '[100]'});
+assert.deepEqual({intervals}, []);
 """)
 
 
