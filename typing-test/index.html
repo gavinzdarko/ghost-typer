@@ -317,6 +317,17 @@ function escHtml(s) {
 const promptCard = document.getElementById('prompt-card');
 const typingInput = document.getElementById('typing-input');
 
+function endTypingRun() {
+  flushBurst();
+  lastKeystrokeTime = 0;
+  lastBackspaceTime = 0;
+  consecutiveBackspaces = 0;
+}
+
+for (const event of ['blur', 'pointerdown', 'compositionstart']) {
+  typingInput.addEventListener(event, endTypingRun);
+}
+
 promptCard.addEventListener('click', () => { typingInput.focus(); });
 document.addEventListener('keydown', (e) => {
   if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
@@ -327,8 +338,12 @@ document.addEventListener('keydown', (e) => {
 });
 
 typingInput.addEventListener('keydown', (e) => {
-  if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
-  if (e.key.length !== 1 && e.key !== 'Backspace') return;
+  if (finished) return;
+  if (e.ctrlKey || e.metaKey || e.isComposing) { endTypingRun(); return; }
+  if (e.key.length !== 1 && e.key !== 'Backspace') {
+    if (!['Shift', 'Alt', 'CapsLock'].includes(e.key)) endTypingRun();
+    return;
+  }
   e.preventDefault();
 
   const now = performance.now();
