@@ -10,7 +10,8 @@ from .models import AbandonWord, ApplyFormatting, MakeMistake, PressKey, Rewrite
 
 
 class PlannedText:
-    def __init__(self, text="", *, track_typos=False, max_typo_distance=None):
+    def __init__(self, text="", *, track_typos=False, max_typo_distance=None,
+                 ignored_shortcuts=()):
         self._text = text
         self._appends = []
         self._length = len(text)
@@ -20,6 +21,9 @@ class PlannedText:
         self.typos = []
         self.track_typos = track_typos
         self.max_typo_distance = max_typo_distance
+        # Verification can ignore known style changes. Editable-region
+        # planning remains conservative by default around formatting borders.
+        self.ignored_shortcuts = frozenset(ignored_shortcuts)
 
     @property
     def text(self):
@@ -104,8 +108,8 @@ class PlannedText:
                     else:
                         self.valid = False
                         return self
-                elif action.key in ("enter", "tab"):
-                    self._insert("\n" if action.key == "enter" else "\t")
+                elif action.key in ("enter", "return", "tab", "space"):
+                    self._insert({"enter": "\n", "return": "\n", "tab": "\t", "space": " "}[action.key])
                 else:
                     self.valid = False
                     return self
@@ -117,7 +121,7 @@ class PlannedText:
                     if self.cursor > self._length:
                         self.valid = False
                         return self
-                else:
+                elif action.shortcut not in self.ignored_shortcuts:
                     self.valid = False
                     return self
         return self
