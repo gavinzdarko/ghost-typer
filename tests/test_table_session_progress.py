@@ -8,7 +8,7 @@ from test_table_retention import app
 def test_table_progress_is_cumulative_across_differently_sized_cells():
     target = app()
     target.fallback_planner.plan.side_effect = lambda segments, **kwargs: TypingPlan(actions=[TypeText(text=segments[0].text)])
-    target._profile.orchestration.progress_report_frequency = 1
+    target._baseline_profile.orchestration.progress_report_frequency = 1
     target.on_progress = Mock()
     def execute(plan, engine, simulator):
         for action in plan.actions:

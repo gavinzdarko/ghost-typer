@@ -91,7 +91,9 @@ class Orchestrator:
         )
 
         # Fallback planner (rule-based, with AI rewriter for drafts)
-        self.fallback_planner = TypingPlanner(self._settings, ai_rewriter=self.ai_rewriter, ai_enabled=ai_enabled, api_key=_api_key)
+        self.fallback_planner = TypingPlanner(
+            self._settings, ai_rewriter=self.ai_rewriter, profile=self._baseline_profile,
+            ai_enabled=ai_enabled, api_key=_api_key)
 
         # Typing state
         self._state = OrchestratorState.IDLE
@@ -464,6 +466,10 @@ class Orchestrator:
         consumed_items = 0
         incomplete = False
         try:
+            # Table fill uses the configured persona, not a previous paste's
+            # temporary AI profile. Planning and execution must agree on it.
+            self._profile = deepcopy(self._baseline_profile)
+            self.fallback_planner.profile = self._profile
             total_word_count = 0
             cell_count = 0
             skipped_count = 0
@@ -630,7 +636,8 @@ class Orchestrator:
         self.ai_profile_generator = AIProfileGenerator(
             self._settings, api_key=new_key, enabled=ai_enabled, fallback_profile=self._baseline_profile)
         self.fallback_planner = TypingPlanner(
-            self._settings, ai_rewriter=self.ai_rewriter, ai_enabled=ai_enabled, api_key=new_key,
+            self._settings, ai_rewriter=self.ai_rewriter, profile=self._baseline_profile,
+            ai_enabled=ai_enabled, api_key=new_key,
         )
 
         logger.info("Settings updated")
