@@ -53,6 +53,7 @@ class KeyEvent:
     is_enter: bool = False
     is_space: bool = False
     is_shift: bool = False  # was shift held
+    run_id: int = 0     # changes when an unmeasured edit interrupts typing
 
 
 @dataclass
@@ -60,8 +61,8 @@ class CorrectionEvent:
     """A detected error correction (backspace sequence)."""
     timestamp: float
     chars_deleted: int
-    pause_before: float     # pause between last char and first backspace
-    pause_after: float      # pause between last backspace and next char
+    pause_before: float | None  # None when interrupted by an unmeasured edit
+    pause_after: float | None
     backspace_intervals: list[float] = field(default_factory=list)
 
 
@@ -92,6 +93,7 @@ class TypingRecorder:
         self._shift_held = False
         self._held_modifiers = set()
         self._done = False
+        self._run_id = 0
         self._listener: keyboard.Listener | None = None
 
     def start(self) -> None:
@@ -99,6 +101,7 @@ class TypingRecorder:
         self._held_modifiers.clear()
         self._shift_held = False
         self._done = False
+        self._run_id = 0
         self._start_time = time.monotonic()
         self._listener = keyboard.Listener(
             on_press=self._on_press,
@@ -133,6 +136,8 @@ class TypingRecorder:
             return False  # stop listener
 
         if key in _SHIFT_KEYS | _SHORTCUT_KEYS:
+            if key in _SHORTCUT_KEYS and key not in self._held_modifiers:
+                self._run_id += 1
             self._held_modifiers.add(key)
             self._shift_held = bool(self._held_modifiers & _SHIFT_KEYS)
             return
@@ -141,7 +146,7 @@ class TypingRecorder:
         if self._held_modifiers & _SHORTCUT_KEYS:
             return
 
-        event = KeyEvent(timestamp=now, char="", is_shift=self._shift_held)
+        event = KeyEvent(timestamp=now, char="", is_shift=self._shift_held, run_id=self._run_id)
 
         if key == keyboard.Key.backspace:
             event.char = "<BS>"
@@ -157,11 +162,18 @@ class TypingRecorder:
         elif hasattr(key, "char") and key.char:
             event.char = key.char
         else:
-            return  # ignore other special keys
+            # Navigation/deletion can change the caret or document without a
+            # measured text key. Case/option modifiers alone preserve typing.
+            if key not in {keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
+                           keyboard.Key.caps_lock}:
+                self._run_id += 1
+            return
 
         self.events.append(event)
 
     def _on_release(self, key) -> None:
+        if key in _SHORTCUT_KEYS and key in self._held_modifiers:
+            self._run_id += 1
         self._held_modifiers.discard(key)
         self._shift_held = bool(self._held_modifiers & _SHIFT_KEYS)
 
@@ -228,7 +240,7 @@ class TypingAnalyzer:
         for prev, curr in zip(self.events, self.events[1:]):
             # Removing backspaces before pairing bridges an entire correction
             # into a fictitious digraph and inflates the baseline key interval.
-            if prev.is_backspace or curr.is_backspace:
+            if prev.run_id != curr.run_id or prev.is_backspace or curr.is_backspace:
                 new_run = True
                 continue
             dt = curr.timestamp - prev.timestamp
@@ -262,7 +274,8 @@ class TypingAnalyzer:
                 bs_count = 0
                 bs_intervals = []
 
-                while i < len(self.events) and self.events[i].is_backspace:
+                while (i < len(self.events) and self.events[i].is_backspace
+                       and self.events[i].run_id == self.events[bs_start].run_id):
                     if bs_count > 0:
                         bs_intervals.append(
                             self.events[i].timestamp - self.events[i - 1].timestamp
@@ -271,16 +284,16 @@ class TypingAnalyzer:
                     i += 1
 
                 # Pause before correction
-                pause_before = 0.0
-                if bs_start > 0:
+                pause_before = None
+                if bs_start > 0 and self.events[bs_start - 1].run_id == self.events[bs_start].run_id:
                     pause_before = (
                         self.events[bs_start].timestamp
                         - self.events[bs_start - 1].timestamp
                     )
 
                 # Pause after correction (before next char)
-                pause_after = 0.0
-                if i < len(self.events):
+                pause_after = None
+                if i < len(self.events) and self.events[i].run_id == self.events[i - 1].run_id:
                     pause_after = (
                         self.events[i].timestamp
                         - self.events[i - 1].timestamp
@@ -300,7 +313,7 @@ class TypingAnalyzer:
         """Find significant pauses and classify them."""
         boundary = None
         for prev, curr in zip(self.events, self.events[1:]):
-            if prev.is_backspace or curr.is_backspace:
+            if prev.run_id != curr.run_id or prev.is_backspace or curr.is_backspace:
                 # Corrections change the visible suffix; do not carry a stale
                 # sentence boundary through deleted/retyped text.
                 boundary = None
@@ -336,11 +349,19 @@ class TypingAnalyzer:
 
     def _compute_word_wpms(self) -> None:
         """Compute WPM for each word typed."""
-        typing_events = [e for e in self.events if not e.is_backspace]
         word_chars = 0
-        word_start_time = typing_events[0].timestamp if typing_events else 0
+        word_start_time = self.events[0].timestamp if self.events else 0
+        previous_run = self.events[0].run_id if self.events else 0
+        interrupted = False
 
-        for e in typing_events:
+        for e in self.events:
+            if e.run_id != previous_run or e.is_backspace or interrupted:
+                word_chars = 0
+                word_start_time = e.timestamp
+            previous_run = e.run_id
+            interrupted = e.is_backspace
+            if e.is_backspace:
+                continue
             if e.is_space or e.is_enter:
                 if word_chars > 0:
                     duration = e.timestamp - word_start_time
@@ -523,8 +544,10 @@ class TypingAnalyzer:
         )
 
         # --- Correction pause times ---
-        correction_pause_before = [c.pause_before for c in self.corrections if c.pause_before < 5]
-        correction_pause_after = [c.pause_after for c in self.corrections if c.pause_after < 5]
+        correction_pause_before = [c.pause_before for c in self.corrections
+                                   if c.pause_before is not None and c.pause_before < 5]
+        correction_pause_after = [c.pause_after for c in self.corrections
+                                  if c.pause_after is not None and c.pause_after < 5]
 
         thinking_min = min(thinking_pauses) if thinking_pauses else 0.3
         thinking_max = (statistics.quantiles(thinking_pauses, n=4)[2]
