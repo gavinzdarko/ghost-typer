@@ -339,7 +339,8 @@ document.addEventListener('keydown', (e) => {
 
 typingInput.addEventListener('keydown', (e) => {
   if (finished) return;
-  if (e.ctrlKey || e.metaKey || e.isComposing) { endTypingRun(); return; }
+  // Option+Backspace deletes a word, not one measured character.
+  if (e.ctrlKey || e.metaKey || e.isComposing || (e.altKey && e.key === 'Backspace')) { endTypingRun(); return; }
   if (e.key.length !== 1 && e.key !== 'Backspace') {
     if (!['Shift', 'Alt', 'CapsLock'].includes(e.key)) endTypingRun();
     return;
