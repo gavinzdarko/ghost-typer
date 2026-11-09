@@ -341,7 +341,9 @@ class TextParser:
         until_found = str(node.get("hidden", "")).lower() == "until-found"
         if until_found and TextParser._content_visibility_mode(node) == "hidden":
             return True
-        default_hidden = (node.has_attr("hidden") and not until_found) or (
+        # RP parentheses are a fallback for browsers without ruby layout.
+        # Like closed dialogs, their UA display:none can be overridden inline.
+        default_hidden = node.name == "rp" or (node.has_attr("hidden") and not until_found) or (
             node.name == "dialog" and not node.has_attr("open"))
         display = TextParser._inline_display(node)
         if display is None:
