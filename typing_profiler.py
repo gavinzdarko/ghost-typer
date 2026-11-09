@@ -80,6 +80,7 @@ class PauseEvent:
 # ---------------------------------------------------------------------------
 
 _SHIFT_KEYS = {keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r}
+_OPTION_KEYS = {keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r}
 _SHORTCUT_KEYS = {keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
                   keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r}
 
@@ -135,7 +136,7 @@ class TypingRecorder:
             self._done = True
             return False  # stop listener
 
-        if key in _SHIFT_KEYS | _SHORTCUT_KEYS:
+        if key in _SHIFT_KEYS | _SHORTCUT_KEYS | _OPTION_KEYS:
             if key in _SHORTCUT_KEYS and key not in self._held_modifiers:
                 self._run_id += 1
             self._held_modifiers.add(key)
@@ -144,6 +145,13 @@ class TypingRecorder:
         # Command/control chords edit or navigate the application; their
         # letters are not text keystrokes and must not train the profile.
         if self._held_modifiers & _SHORTCUT_KEYS:
+            return
+
+        # Option+Backspace deletes a word on macOS. Its deletion distance is
+        # unknown, so it cannot train a one-character correction or join the
+        # surrounding typing runs. Option printable characters remain text.
+        if key == keyboard.Key.backspace and self._held_modifiers & _OPTION_KEYS:
+            self._run_id += 1
             return
 
         event = KeyEvent(timestamp=now, char="", is_shift=self._shift_held, run_id=self._run_id)
