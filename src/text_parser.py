@@ -67,7 +67,11 @@ class TextParser:
         return segments
 
     # Tags whose content should be removed entirely
-    STRIP_TAGS = {"script", "style", "noscript", "svg", "math", "head", "title", "meta", "link", "base", "template"}
+    STRIP_TAGS = {"script", "style", "noscript", "svg", "math", "head", "title", "meta", "link", "base", "template",
+                  # Modern interactive browsers render these as embedded
+                  # content, never their literal fallback descendants. Do not
+                  # type hidden fallback messages or fetch external resources.
+                  "iframe", "canvas", "audio", "video"}
 
     # Regex for citation-like <sup> content: [1], [a], [1][2], [edit], etc.
     _SUP_CITATION_RE = re.compile(r"^\s*\[[\d\w,\s]+\]\s*$")
