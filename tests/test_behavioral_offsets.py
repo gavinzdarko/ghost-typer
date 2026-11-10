@@ -16,15 +16,15 @@ def test_every_token_uses_its_own_source_offset():
     p._get_composition_multiplier = Mock(return_value=1)
     p._get_composition_clause_pause = Mock(return_value=0)
     p._build_word_speed_actions('first  second, third')
-    assert [c.args[0] for c in p._get_quote_multiplier.call_args_list] == [20, 27, 35]
-    assert [c.args[0] for c in p._get_composition_multiplier.call_args_list] == [20, 27, 35]
-    assert [c.args[1] for c in p._get_composition_clause_pause.call_args_list] == [20, 27, 35]
+    assert [c.args[0] for c in p._get_quote_multiplier.call_args_list] == [20, 25, 26, 27, 30, 34, 35]
+    assert [c.args[0] for c in p._get_composition_multiplier.call_args_list] == [20, 25, 26, 27, 30, 34, 35]
+    assert [c.args[1] for c in p._get_composition_clause_pause.call_args_list] == [24, 33, 39]
     assert p._char_position == 20  # caller consumes this source run once
 
 
 def test_quote_range_does_not_affect_whole_run():
     p = planner()
-    p._behavioral_content = {'quote_ranges': [{'start': 4, 'end': 8}]}
+    p._behavioral_content = {'quote_ranges': [{'start': 4, 'end': 9}]}
     actions = p._build_word_speed_actions('one quote end')
     speeds = [a.speed_multiplier for a in actions if isinstance(a, TypeText) and 'quote' in a.text]
     assert speeds == [p.profile.behaviors.quote.speed_multiplier]

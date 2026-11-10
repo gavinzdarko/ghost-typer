@@ -6,6 +6,7 @@ of TypingActions, pre-planning mistakes, pauses, and rewrites.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 import math
 import random
 import re
@@ -1573,13 +1574,18 @@ class TypingPlanner:
         actions: list[TypingAction] = []
         # Split into (word, separator) pairs preserving all characters
         tokens = re.split(r"(\s+)", run_text)
+        boundaries = sorted({entry[key]
+                             for name in ("quote_ranges", "composition_annotations")
+                             for entry in bc.get(name, [])
+                             for key in ("start", "end")})
 
         token_position = self._char_position
         for token in tokens:
             if not token:
                 continue
             if token.isspace():
-                actions.append(TypeText(text=token))
+                positioned, _ = self._position_speed_actions([TypeText(text=token)], token_position, boundaries)
+                actions.extend(positioned)
                 token_position += len(token)
                 continue
 
@@ -1588,16 +1594,6 @@ class TypingPlanner:
             # whereas TypeText and quote/composition profiles describe speed.
             multiplier = 1.0 / self._get_word_speed(token)
 
-            # Quote speed override (Feature 10)
-            quote_mult = self._get_quote_multiplier(token_position)
-            if quote_mult is not None:
-                multiplier = min(multiplier, quote_mult)
-
-            # Feature 8: Composition mode speed adjustment
-            comp_mult = self._get_composition_multiplier(token_position)
-            if comp_mult != 1.0:
-                multiplier *= comp_mult
-
             # Feature 2: Pre-word pause for difficult words
             pre_pause = self._get_pre_word_pause(token)
             if pre_pause > 0:
@@ -1605,20 +1601,17 @@ class TypingPlanner:
 
             # Feature 3: Syllable-boundary pauses — split word into syllable chunks
             syllable_actions = self._build_syllable_actions(token, multiplier)
-            if syllable_actions:
-                actions.extend(syllable_actions)
-            elif multiplier != 1.0:
-                actions.append(TypeText(text=token, speed_multiplier=multiplier))
-            else:
-                actions.append(TypeText(text=token))
+            token_actions = syllable_actions or [TypeText(text=token, speed_multiplier=multiplier)]
+            positioned_actions, in_quote = self._position_speed_actions(token_actions, token_position, boundaries)
+            actions.extend(positioned_actions)
 
             # Feature 8: Composition clause-boundary pause
-            clause_pause = self._get_composition_clause_pause(token, token_position)
+            clause_pause = self._get_composition_clause_pause(token, token_position + len(token) - 1)
             if clause_pause > 0:
                 actions.append(Pause(duration=clause_pause, description="Composing next clause"))
 
             # Source-glance pause (Feature 10) — occasional brief pause when in a quote
-            if quote_mult is not None and self._rng.random() < self.profile.behaviors.quote.source_glance_frequency:
+            if in_quote and self._rng.random() < self.profile.behaviors.quote.source_glance_frequency:
                 actions.append(Pause(
                     duration=self._r(self.profile.behaviors.quote.source_glance_pause),
                     description="Glancing at source",
@@ -1648,6 +1641,33 @@ class TypingPlanner:
         flush()
 
         return merged if merged else [TypeText(text=run_text)]
+
+    def _position_speed_actions(self, actions: list[TypingAction], position: int,
+                                boundaries: list[int]) -> tuple[list[TypingAction], bool]:
+        """Apply character-range timing without shifting word or syllable boundaries."""
+        if not boundaries:
+            return actions, False
+        result = []
+        in_quote = False
+        for action in actions:
+            if not isinstance(action, TypeText):
+                result.append(action)
+                continue
+            end = position + len(action.text)
+            lo = bisect_right(boundaries, position)
+            hi = bisect_left(boundaries, end)
+            cuts = [position, *boundaries[lo:hi], end]
+            for start, stop in zip(cuts, cuts[1:]):
+                speed = action.speed_multiplier
+                quote = self._get_quote_multiplier(start)
+                if quote is not None:
+                    speed = min(speed, quote)
+                    in_quote = True
+                speed *= self._get_composition_multiplier(start)
+                result.append(TypeText(text=action.text[start - position:stop - position],
+                                       speed_multiplier=speed))
+            position = end
+        return result, in_quote
 
     # ------------------------------------------------------------------
     # Feature 2: Pre-word difficulty pause
