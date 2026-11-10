@@ -14,6 +14,10 @@ can use to mimic your style. Captures:
 Run this, type naturally for a few minutes, then press ESC to finish.
 It will analyze your typing and save a profile.
 
+Tab and Shift+Tab are unmeasured edit boundaries: they can move focus rather
+than insert text. Indentation tabs are intentionally unmeasured too because
+the recorder cannot determine the destination application's action.
+
 Usage:
     python3 typing_profiler.py [--prompt FILE]
 
@@ -154,6 +158,13 @@ class TypingRecorder:
             self._run_id += 1
             return
 
+        # Tab/Shift+Tab commonly move focus. Without destination state we
+        # cannot distinguish navigation from indentation, so measure neither
+        # as text nor timing between the surrounding fields.
+        if key == keyboard.Key.tab:
+            self._run_id += 1
+            return
+
         event = KeyEvent(timestamp=now, char="", is_shift=self._shift_held, run_id=self._run_id)
 
         if key == keyboard.Key.backspace:
@@ -165,8 +176,6 @@ class TypingRecorder:
         elif key == keyboard.Key.space:
             event.char = " "
             event.is_space = True
-        elif key == keyboard.Key.tab:
-            event.char = "\t"
         elif hasattr(key, "char") and key.char:
             event.char = key.char
         else:
