@@ -82,6 +82,9 @@ bash build.sh
 cp -r "dist/Ghost Typer.app" /Applications/
 ```
 
+To include OCR support in the app, install `pip3 install '.[verification]'`
+before building. OCR also requires the Tesseract executable on the target Mac.
+
 ## Settings
 
 Configurable from the menu bar:
