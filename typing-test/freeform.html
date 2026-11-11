@@ -110,6 +110,11 @@ let prevChar = '', currentBurst = [], timerInterval = null;
 
 const area = document.getElementById('typing-area');
 
+function isTextKey(key) {
+  // KeyboardEvent.key uses UTF-16; a supplementary character is one key too.
+  return key.length === 1 || (key.length === 2 && key.codePointAt(0) > 0xFFFF);
+}
+
 // Pasted/dropped text has no keystroke timings and would inflate measured WPM.
 for (const event of ['paste', 'drop']) {
   area.addEventListener(event, e => e.preventDefault());
@@ -133,7 +138,7 @@ area.addEventListener('keydown', e => {
   if (finished) return;
   // Option+Backspace deletes a word, not one measured character.
   if (e.ctrlKey || e.metaKey || e.isComposing || (e.altKey && e.key === 'Backspace')) { endTypingRun(); return; }
-  if (e.key.length !== 1 && e.key !== 'Backspace' && e.key !== 'Enter') {
+  if (!isTextKey(e.key) && e.key !== 'Backspace' && e.key !== 'Enter') {
     if (!['Shift', 'Alt', 'CapsLock'].includes(e.key)) endTypingRun();
     return;
   }
@@ -147,7 +152,7 @@ area.addEventListener('keydown', e => {
     lastBsTime = now;
     prevChar = '';
     flushBurst();
-  } else if (e.key.length === 1 || e.key === 'Enter') {
+  } else if (isTextKey(e.key) || e.key === 'Enter') {
     charCount++;
     lastBsTime = 0;
     if (iki > 0) {

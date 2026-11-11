@@ -261,7 +261,7 @@ let errorsAtPos = {};  // pos -> { noticeDistance } for errors still in typed te
 // ── Init ──
 function init() {
   promptText = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
-  promptChars = promptText.split('');
+  promptChars = Array.from(promptText);
   typed = [];
   started = false;
   finished = false;
@@ -317,6 +317,11 @@ function escHtml(s) {
 const promptCard = document.getElementById('prompt-card');
 const typingInput = document.getElementById('typing-input');
 
+function isTextKey(key) {
+  // KeyboardEvent.key uses UTF-16; a supplementary character is one key too.
+  return key.length === 1 || (key.length === 2 && key.codePointAt(0) > 0xFFFF);
+}
+
 function endTypingRun() {
   flushBurst();
   lastKeystrokeTime = 0;
@@ -331,8 +336,8 @@ for (const event of ['blur', 'pointerdown', 'compositionstart']) {
 promptCard.addEventListener('click', () => { typingInput.focus(); });
 document.addEventListener('keydown', (e) => {
   if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
-  if (e.key.length !== 1 && e.key !== 'Backspace') return;
-  if (!started && e.key.length === 1) {
+  if (!isTextKey(e.key) && e.key !== 'Backspace') return;
+  if (!started && isTextKey(e.key)) {
     typingInput.focus();
   }
 });
@@ -341,7 +346,7 @@ typingInput.addEventListener('keydown', (e) => {
   if (finished) return;
   // Option+Backspace deletes a word, not one measured character.
   if (e.ctrlKey || e.metaKey || e.isComposing || (e.altKey && e.key === 'Backspace')) { endTypingRun(); return; }
-  if (e.key.length !== 1 && e.key !== 'Backspace') {
+  if (!isTextKey(e.key) && e.key !== 'Backspace') {
     if (!['Shift', 'Alt', 'CapsLock'].includes(e.key)) endTypingRun();
     return;
   }
@@ -349,7 +354,7 @@ typingInput.addEventListener('keydown', (e) => {
 
   const now = performance.now();
 
-  if (!started && (e.key.length === 1 || e.key === 'Backspace')) {
+  if (!started && (isTextKey(e.key) || e.key === 'Backspace')) {
     started = true;
     startTime = now;
     document.getElementById('click-hint').classList.remove('visible');
@@ -362,7 +367,7 @@ typingInput.addEventListener('keydown', (e) => {
 
   if (e.key === 'Backspace') {
     handleBackspace(now, iki);
-  } else if (e.key.length === 1) {
+  } else if (isTextKey(e.key)) {
     handleChar(e.key, now, iki);
   }
 

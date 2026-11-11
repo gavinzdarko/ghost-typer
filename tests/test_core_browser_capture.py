@@ -29,7 +29,8 @@ function element(id) {
   });
   return elements.get(id);
 }
-const document = {getElementById: element, addEventListener() {}};
+const document = {listeners: {}, getElementById: element,
+  addEventListener(name, fn) { this.listeners[name] = fn; }};
 const performance = {now: () => now};
 const window = {scrollTo() {}};
 const navigator = {clipboard: {writeText: async () => {}}};
