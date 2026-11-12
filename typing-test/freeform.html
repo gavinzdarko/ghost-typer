@@ -273,13 +273,14 @@ function showResults() {
   // Config suggestion
   const bsMed = med(bsIkis);
   ft('t-config', [
-    ['wpm', wpm], ['wpm_variance', Math.round(wpm*0.2)],
+    // Clamp suggestions to Settings' bounds; overview and JSON retain measurements.
+    ['wpm', Math.max(1, Math.min(1000, wpm))], ['wpm_variance', Math.min(1000, Math.round(wpm*0.2))],
     ['error_rate', (errRate).toFixed(3)],
     ['backspace_delay ~', Math.round(bsMed)+'ms'],
-    ['burst_length_min', Math.max(3, Math.round(avg(bursts.map(b=>b.len)))-2)],
-    ['burst_length_max', bursts.length ? Math.max(...bursts.map(b=>b.len))+2 : 15],
+    ['burst_length_min', Math.min(3600, Math.max(3, Math.round(avg(bursts.map(b=>b.len)))-2))],
+    ['burst_length_max', Math.min(3600, bursts.length ? Math.max(...bursts.map(b=>b.len))+2 : 15)],
     ['pause_duration_min', (Math.min(...pauses,1500)/1000).toFixed(1)+'s'],
-    ['pause_duration_max', (Math.max(...pauses,5000)/1000).toFixed(1)+'s'],
+    ['pause_duration_max', Math.min(3600, Math.max(...pauses,5000)/1000).toFixed(1)+'s'],
   ]);
 
   document.getElementById('results').style.display = 'block';

@@ -827,7 +827,7 @@ function drawLineChart(canvasId, data) {
 // ── JSON export ──
 function buildConfigJSON() {
   const elapsed = elapsedSeconds();
-  const wpm = Math.round((cursorPos / 5 / elapsed) * 60);
+  const wpm = elapsed > 0 ? Math.round((cursorPos / 5 / elapsed) * 60) : 0;
   const errorRate = totalKeystrokes > 0 ? errorKeystrokes / totalKeystrokes : 0;
 
   const ikiMean = ikiValues.reduce((sum, value) => sum + value, 0) / (ikiValues.length || 1);
@@ -863,8 +863,9 @@ function buildConfigJSON() {
 
   return {
     ghost_typer_settings: {
-      wpm: wpm,
-      wpm_variance: Math.round(wpm * 0.2),
+      // Match Settings.from_dict's supported bounds without changing raw data.
+      wpm: Math.max(1, Math.min(1000, wpm)),
+      wpm_variance: Math.min(1000, Math.round(wpm * 0.2)),
       error_rate: parseFloat(errorRate.toFixed(3)),
       correction_delay_chars_min: 0,
       correction_delay_chars_max: Math.min(maxCharsAfter, 6),
