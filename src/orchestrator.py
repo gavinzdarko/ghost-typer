@@ -242,7 +242,8 @@ class Orchestrator:
     def resume(self) -> None:
         """Resume only a session that still owns its paused simulator."""
         with self._session_lock:
-            if self.state != OrchestratorState.PAUSED or getattr(self, "_menu_open", False):
+            if (self._cancel_event.is_set() or self.state != OrchestratorState.PAUSED
+                    or getattr(self, "_menu_open", False)):
                 return
             sim = self._simulator
             if sim is None:
@@ -268,8 +269,10 @@ class Orchestrator:
             sim = self._simulator
             worker = self._typing_thread
         if sim:
-            sim.resume()
             sim.stop()
+            # Close event admission before releasing a paused worker. Resuming
+            # first can let its pending key escape before stop() takes effect.
+            sim.resume()
         if blocking and worker and worker is not threading.current_thread() and worker.ident is not None:
             worker.join(timeout=5.0)
         with self._session_lock:
