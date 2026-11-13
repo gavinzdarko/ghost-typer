@@ -10,6 +10,7 @@ def app(state):
     instance._state_revision = 0
     instance._state_lock = threading.Lock()
     instance._session_lock = threading.RLock()
+    instance._cancel_event = threading.Event()
     instance.on_state_change = Mock()
     instance.notification_service = Mock()
     instance._simulator = Mock()

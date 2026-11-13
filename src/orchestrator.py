@@ -242,7 +242,8 @@ class Orchestrator:
     def resume(self) -> None:
         """Resume only a session that still owns its paused simulator."""
         with self._session_lock:
-            if self.state != OrchestratorState.PAUSED or getattr(self, "_menu_open", False):
+            if (self._cancel_event.is_set() or self.state != OrchestratorState.PAUSED
+                    or getattr(self, "_menu_open", False)):
                 return
             sim = self._simulator
             if sim is None:

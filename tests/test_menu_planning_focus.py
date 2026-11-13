@@ -23,6 +23,7 @@ def target():
     orch._state_revision = 0
     orch._state_lock = threading.Lock()
     orch._session_lock = threading.RLock()
+    orch._cancel_event = threading.Event()
     orch.on_state_change = None
     orch.notification_service = Mock()
     return SimpleNamespace(orchestrator=orch, _shutting_down=False, _menu_auto_paused=False)
