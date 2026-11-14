@@ -28,6 +28,7 @@ def test_recorder_breaks_timing_after_edits_and_shortcuts(monkeypatch, boundary)
 
 def test_shift_keeps_timing_and_restart_clears_run_state(monkeypatch):
     monkeypatch.setattr(module.keyboard, 'Listener', Mock())
+    monkeypatch.setattr(module.mouse, 'Listener', Mock())
     recorder = TypingRecorder()
     recorder._on_press(keyboard.KeyCode.from_char('a'))
     recorder._on_press(keyboard.Key.shift)

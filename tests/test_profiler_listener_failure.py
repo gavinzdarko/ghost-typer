@@ -10,6 +10,7 @@ def listener_recorder(monkeypatch, *, alive=False, error=None):
     listener.is_alive.return_value = alive
     listener.join.side_effect = error
     monkeypatch.setattr(module.keyboard, 'Listener', Mock(return_value=listener))
+    monkeypatch.setattr(module.mouse, 'Listener', Mock())
     recorder = module.TypingRecorder()
     recorder.start()
     return recorder, listener
@@ -40,6 +41,7 @@ def test_cli_listener_failures_stop_recording_without_export(monkeypatch, tmp_pa
     if fail_on_start:
         listener.start.side_effect = RuntimeError('startup failed')
     monkeypatch.setattr(module.keyboard, 'Listener', Mock(return_value=listener))
+    monkeypatch.setattr(module.mouse, 'Listener', Mock())
     output = tmp_path / 'profile.json'
     monkeypatch.setattr(module.sys, 'argv', ['typing_profiler.py', '--freeform', '-o', str(output)])
     # The liveness check must fail on the first poll, before the wait loop.

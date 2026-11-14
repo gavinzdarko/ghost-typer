@@ -34,6 +34,7 @@ def test_recorder_uses_monotonic_time_and_restarts_cleanly(monkeypatch):
     monkeypatch.setattr(module.time, "time", Mock(side_effect=AssertionError("wall clock")))
     monkeypatch.setattr(module.time, "monotonic", Mock(side_effect=[10, 11, 12, 20, 21]))
     monkeypatch.setattr(module.keyboard, "Listener", Mock())
+    monkeypatch.setattr(module.mouse, 'Listener', Mock())
     recorder = TypingRecorder()
     recorder.start()
     recorder._on_press(keyboard.KeyCode.from_char("a"))

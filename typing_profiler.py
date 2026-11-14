@@ -17,6 +17,8 @@ It will analyze your typing and save a profile.
 Tab and Shift+Tab are unmeasured edit boundaries: they can move focus rather
 than insert text. Indentation tabs are intentionally unmeasured too because
 the recorder cannot determine the destination application's action.
+Pointer presses also end measured typing runs because they can move the caret
+or change fields. Pointer movement and releases do not interrupt typing.
 
 Usage:
     python3 typing_profiler.py [--prompt FILE]
@@ -32,13 +34,14 @@ import json
 import math
 import statistics
 import sys
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
-    from pynput import keyboard
+    from pynput import keyboard, mouse
 except ImportError:
     print("ERROR: pynput is required. Install it:  pip install pynput")
     sys.exit(1)
@@ -100,6 +103,8 @@ class TypingRecorder:
         self._done = False
         self._run_id = 0
         self._listener: keyboard.Listener | None = None
+        self._mouse_listener: mouse.Listener | None = None
+        self._record_lock = threading.Lock()
 
     def start(self) -> None:
         self.events.clear()
@@ -108,31 +113,72 @@ class TypingRecorder:
         self._done = False
         self._run_id = 0
         self._start_time = time.monotonic()
-        self._listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release,
-        )
-        self._listener.start()
+        try:
+            self._listener = keyboard.Listener(
+                on_press=self._on_press,
+                on_release=self._on_release,
+            )
+            self._mouse_listener = mouse.Listener(on_click=self._on_click)
+            self._listener.start()
+            self._mouse_listener.start()
+        except Exception:
+            self.stop()
+            raise
 
     def stop(self) -> None:
-        self._done = True
-        if self._listener:
-            self._listener.stop()
+        with self._record_lock:
+            self._done = True
+            listener, self._listener = self._listener, None
+            pointer, self._mouse_listener = self._mouse_listener, None
+        try:
+            if listener:
+                listener.stop()
+        finally:
+            if pointer:
+                pointer.stop()
 
     @property
     def is_done(self) -> bool:
-        if not self._done and self._listener is not None and not self._listener.is_alive():
-            # pynput runs callbacks and event-tap setup on its own thread.
-            # Surface a dead listener instead of waiting forever for an ESC
-            # event that can no longer arrive. join also retrieves its error.
-            try:
-                self._listener.join(timeout=0)
-            except Exception as exc:
-                raise RuntimeError("The keyboard listener failed") from exc
-            raise RuntimeError("The keyboard listener stopped unexpectedly")
+        if not self._done:
+            # Both event taps must remain healthy: losing pointer boundaries
+            # silently turns caret changes into adjacent typing samples.
+            for name, listener in (("keyboard", self._listener),
+                                   ("pointer", self._mouse_listener)):
+                if listener is not None and not listener.is_alive():
+                    # ESC can finish recording while liveness is being read.
+                    # Do not hold the callback lock across a thread join.
+                    with self._record_lock:
+                        if self._done:
+                            return True
+                    try:
+                        listener.join(timeout=0)
+                    except Exception as exc:
+                        with self._record_lock:
+                            if self._done:
+                                return True
+                            raise RuntimeError(f"The {name} listener failed") from exc
+                    with self._record_lock:
+                        if self._done:
+                            return True
+                        raise RuntimeError(f"The {name} listener stopped unexpectedly")
         return self._done
 
+    def _on_click(self, x, y, button, pressed) -> None:
+        # A pointer press can move the caret or focus another field. Movement
+        # and releases alone are not edit boundaries. Do not record coordinates.
+        if pressed:
+            with self._record_lock:
+                if not self._done:
+                    self._run_id += 1
+
     def _on_press(self, key) -> None:
+        # Keyboard and pointer listeners invoke callbacks on separate threads.
+        # Timestamp, modifier state, run assignment and append form one sample.
+        with self._record_lock:
+            if not self._done:
+                return self._record_press(key)
+
+    def _record_press(self, key) -> None:
         now = time.monotonic()
 
         # ESC = finish recording
@@ -189,6 +235,11 @@ class TypingRecorder:
         self.events.append(event)
 
     def _on_release(self, key) -> None:
+        with self._record_lock:
+            if not self._done:
+                self._record_release(key)
+
+    def _record_release(self, key) -> None:
         if key in _SHORTCUT_KEYS and key in self._held_modifiers:
             self._run_id += 1
         self._held_modifiers.discard(key)
