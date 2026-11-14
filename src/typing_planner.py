@@ -559,43 +559,38 @@ class TypingPlanner:
         if not text:
             return actions, 0
 
-        char_count = 0
-        i = 0
-        while i < len(text):
+        run_start = 0
+        for i, char in enumerate(text):
             self._check_cancelled()
-            char = text[i]
 
             # Occasional single-char mistake (backspace and fix, no arrow keys)
+            # Decide once per eligible source character. Looking ahead while
+            # batching a run must not reroll and lose its selected boundary typo.
             if (char.isascii() and char.isalpha()
                     and self._rng.random() < self._planned_error_rate(i)):
                 typo_char = self.engine.generate_typo(char)
                 if (typo_char and typo_char != char and len(typo_char) == 1
                         and typo_char.isascii() and typo_char.isprintable()):
+                    if run_start < i:
+                        actions.append(TypeText(text=text[run_start:i]))
                     # Type wrong char, backspace, type correct
                     actions.append(TypeText(text=typo_char))
                     actions.append(Rewrite.simple(delete_count=1, text=char))
-                    char_count += 1
-                    i += 1
+                    run_start = i + 1
                     continue
 
-            # Normal typing — accumulate a run
-            run_start = i
             # A dropped/double/unchanged typo is unsuitable in simple mode.
             # Consume its source character normally instead of rerolling the
             # same position forever when the configured error rate is 100%.
-            i += 1
-            while i < len(text) and not (text[i].isascii() and text[i].isalpha()
-                    and self._rng.random() < self._planned_error_rate(i)):
-                i += 1
-                if i - run_start > 8:  # break runs to keep them natural
-                    break
-            run_text = text[run_start:i]
-            if run_text:
-                actions.append(TypeText(text=run_text))
-                char_count += len(run_text)
+            if i + 1 - run_start >= 9:
+                actions.append(TypeText(text=text[run_start:i + 1]))
+                run_start = i + 1
+
+        if run_start < len(text):
+            actions.append(TypeText(text=text[run_start:]))
 
         self._char_position += len(text)
-        return actions, char_count
+        return actions, len(text)
 
     # ------------------------------------------------------------------
     # Formatting
