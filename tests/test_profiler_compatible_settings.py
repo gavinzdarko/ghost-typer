@@ -17,7 +17,7 @@ def analyze(times, chars):
 
 def test_sparse_recording_exports_minimum_supported_speed_with_raw_measurement():
     profile, _ = analyze([index * 40 for index in range(20)], 'a' * 20)
-    assert profile['ghost_typer_settings']['wpm'] == 1
+    assert profile['ghost_typer_settings']['wpm'] == 10
     assert profile['analysis']['avg_wpm'] == .3
 
 

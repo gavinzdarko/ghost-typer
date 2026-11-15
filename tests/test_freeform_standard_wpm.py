@@ -11,7 +11,8 @@ assert.equal(element('s-wpm').textContent, 4);
 assert.equal(buildJSON().wpm, 4);
 showResults();
 assert.match(element('t-overview').innerHTML, /<td>WPM<\\/td><td>4<\\/td>/);
-assert.match(element('t-config').innerHTML, /<td>wpm<\\/td><td>4<\\/td>/);
+// Playback suggestions use the supported floor; raw measurement stays at 4.
+assert.match(element('t-config').innerHTML, /<td>wpm<\\/td><td>10<\\/td>/);
 assert.equal(standardWpm('a b c d e f g h i jk', 60), 4);
 assert.equal(standardWpm('', 0), 0);
 """)

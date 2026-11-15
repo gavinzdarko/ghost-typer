@@ -274,7 +274,7 @@ function showResults() {
   const bsMed = med(bsIkis);
   ft('t-config', [
     // Clamp suggestions to Settings' bounds; overview and JSON retain measurements.
-    ['wpm', Math.max(1, Math.min(1000, wpm))], ['wpm_variance', Math.min(1000, Math.round(wpm*0.2))],
+    ['wpm', Math.max(10, Math.min(1000, wpm))], ['wpm_variance', Math.min(1000, Math.round(wpm*0.2))],
     ['error_rate', (errRate).toFixed(3)],
     ['backspace_delay ~', Math.round(bsMed)+'ms'],
     ['burst_length_min', Math.min(3600, Math.max(3, Math.round(avg(bursts.map(b=>b.len)))-2))],

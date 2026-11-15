@@ -864,7 +864,7 @@ function buildConfigJSON() {
   return {
     ghost_typer_settings: {
       // Match Settings.from_dict's supported bounds without changing raw data.
-      wpm: Math.max(1, Math.min(1000, wpm)),
+      wpm: Math.max(10, Math.min(1000, wpm)),
       wpm_variance: Math.min(1000, Math.round(wpm * 0.2)),
       error_rate: parseFloat(errorRate.toFixed(3)),
       correction_delay_chars_min: 0,
