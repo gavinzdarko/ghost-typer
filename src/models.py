@@ -870,6 +870,10 @@ class Settings:
                     upper = 100
                 if valid:
                     valid = lower <= value <= upper
+                if valid and key == "wpm":
+                    # Legacy profiles accepted 1–9 WPM although playback has
+                    # a 10 WPM floor. Match playback without resetting to 60.
+                    value = max(10, value)
             values[key] = value if valid else default
         for low, high in (("correction_delay_chars_min", "correction_delay_chars_max"),
                           ("pause_duration_min", "pause_duration_max"),

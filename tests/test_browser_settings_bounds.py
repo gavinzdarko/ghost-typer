@@ -38,14 +38,14 @@ console.log(JSON.stringify(buildConfigJSON()));
     assert_settings_survive_import(settings)
     measured = round(20 / 5 / (19 * gap_ms / 1000) * 60)
     assert data['measured_data']['wpm'] == measured
-    assert settings['wpm'] == max(1, min(1000, measured))
+    assert settings['wpm'] == max(10, min(1000, measured))
     assert settings['wpm_variance'] == min(1000, round(measured * .2))
 
 
 def test_unstarted_prompt_snapshot_has_finite_speed_fields():
     data = capture('index.html', 'console.log(JSON.stringify(buildConfigJSON()));')
     assert data['measured_data']['wpm'] == 0
-    assert data['ghost_typer_settings']['wpm'] == 1
+    assert data['ghost_typer_settings']['wpm'] == 10
     assert_settings_survive_import(data['ghost_typer_settings'])
 
 
@@ -68,7 +68,7 @@ console.log(JSON.stringify({{html: element('t-config').innerHTML, raw: buildJSON
     assert_settings_survive_import(suggestions)
     measured = round(count / 5 / ((count - 1) * gap_ms / 1000) * 60)
     assert data['raw']['wpm'] == measured
-    assert suggestions['wpm'] == max(1, min(1000, measured))
+    assert suggestions['wpm'] == max(10, min(1000, measured))
     assert suggestions['wpm_variance'] == min(1000, round(measured * .2))
     if gap_ms > 500:
         assert data['raw']['pauses']['avg_ms'] == gap_ms

@@ -72,6 +72,10 @@ session. It keeps a zero error rate at zero. This estimate does not predict
 runtime pause recovery, extra correction keystrokes, or random typing bursts;
 those still affect execution timing separately.
 
+Imported and exported base speeds use a 10 WPM minimum, matching playback.
+Legacy profiles with 1–9 WPM load at 10 WPM; profiler reports retain the raw
+measured speed. The menu accepts 10–300 WPM.
+
 ### Build as App (optional)
 
 To create a standalone `Ghost Typer.app`:
