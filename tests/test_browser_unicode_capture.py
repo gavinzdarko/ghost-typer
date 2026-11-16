@@ -48,13 +48,16 @@ def test_supplementary_key_can_focus_an_unstarted_prompt():
     run("index.html", """
 let focused = 0;
 element('typing-input').focus = () => focused++;
-document.listeners.keydown({key: '𐐀'});
+document.listeners.keydown({key: '𐐀', preventDefault() {}});
 assert.equal(focused, 1);
+assert.equal(started, true);
+assert.deepEqual(typed, ['𐐀']);
 document.listeners.keydown({key: 'ArrowLeft'});
 document.listeners.keydown({key: '😀', isComposing: true});
 document.listeners.keydown({key: '😀', metaKey: true});
 document.listeners.keydown({key: '👩‍💻'});
 assert.equal(focused, 1);
+assert.equal(totalKeystrokes, 1);
 """)
 
 

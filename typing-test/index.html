@@ -335,14 +335,18 @@ for (const event of ['blur', 'pointerdown', 'compositionstart']) {
 
 promptCard.addEventListener('click', () => { typingInput.focus(); });
 document.addEventListener('keydown', (e) => {
-  if (finished || e.ctrlKey || e.metaKey || e.isComposing) return;
-  if (!isTextKey(e.key) && e.key !== 'Backspace') return;
-  if (!started && isTextKey(e.key)) {
-    typingInput.focus();
-  }
+  if (started || finished || e.defaultPrevented || e.ctrlKey || e.metaKey || e.isComposing) return;
+  if (!isTextKey(e.key) || e.target === typingInput) return;
+  // Leave form controls, links and editable regions to their own key handlers.
+  if (e.target?.closest?.('input, textarea, select, button, a[href], [contenteditable]:not([contenteditable="false"])')) return;
+  typingInput.focus();
+  // Focus changes the next key's target, not this event's propagation path.
+  handleTypingKeydown(e);
 });
 
-typingInput.addEventListener('keydown', (e) => {
+typingInput.addEventListener('keydown', handleTypingKeydown);
+
+function handleTypingKeydown(e) {
   if (finished) return;
   // Option+Backspace deletes a word, not one measured character.
   if (e.ctrlKey || e.metaKey || e.isComposing || (e.altKey && e.key === 'Backspace')) { endTypingRun(); return; }
@@ -379,7 +383,7 @@ typingInput.addEventListener('keydown', (e) => {
   if (cursorPos >= promptChars.length) {
     finish();
   }
-});
+}
 
 function handleChar(key, now, iki) {
   totalKeystrokes++;
