@@ -40,6 +40,11 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+if __package__:
+    from .src.models import PauseBehavior
+else:
+    from src.models import PauseBehavior
+
 try:
     from pynput import keyboard, mouse
 except ImportError:
@@ -536,7 +541,18 @@ class TypingAnalyzer:
             p.duration for p in self.pauses
             if p.context in ("word_boundary", "mid_word")
         ]
-        pause_frequency = len(thinking_pauses) / max(total_chars, 1)
+        # Playback rolls at ordinary spaces, then multiplies the setting by
+        # the persona's probability factor. Calibrate for the default persona
+        # rather than exporting a per-character rate and shrinking it twice.
+        # Run starts and correction edges have no measured adjacent interval.
+        pause_opportunities = sum(
+            curr.char == " " and not prev.is_backspace and not curr.is_backspace
+            and prev.run_id == curr.run_id
+            for prev, curr in zip(self.events, self.events[1:])
+        )
+        pause_factor = PauseBehavior().thinking_pause_probability_factor
+        pause_frequency = (len(thinking_pauses) / pause_opportunities / pause_factor
+                           if pause_opportunities else 0)
 
         # --- Burst analysis ---
         burst_enabled = len(self.burst_lengths) > 3
@@ -629,7 +645,7 @@ class TypingAnalyzer:
             "error_rate": round(min(error_rate, 0.25), 4),
             "correction_delay_chars_min": min(12, max(0, correction_delay_min)),
             "correction_delay_chars_max": min(correction_delay_max, 12),
-            "pause_frequency": round(min(pause_frequency, 0.3), 4),
+            "pause_frequency": round(min(pause_frequency, 1), 4),
             "pause_duration_min": round(thinking_min, 2),
             "pause_duration_max": round(thinking_max, 2),
             "fatigue_enabled": fatigue_detected,
@@ -692,6 +708,7 @@ class TypingAnalyzer:
                     statistics.mean(self.burst_lengths), 1
                 ) if self.burst_lengths else 0,
                 "thinking_pause_count": len(thinking_pauses),
+                "thinking_pause_opportunities": pause_opportunities,
                 "sentence_pause_count": len(sentence_pauses),
                 "paragraph_pause_count": len(paragraph_pauses),
                 "char_class_multipliers": char_class_multipliers,

@@ -76,6 +76,13 @@ Imported and exported base speeds use a 10 WPM minimum, matching playback.
 Legacy profiles with 1–9 WPM load at 10 WPM; profiler reports retain the raw
 measured speed. The menu accepts 10–300 WPM.
 
+The native profiler estimates thinking-pause density at measured spaces and
+converts it to the default typing profile's probability scale. The exported
+setting is capped at 1, which represents at most a 10% chance per space with
+that profile. Recordings without measured spaces export 0; raw pause counts
+remain in the analysis. Midword pauses are approximated at word boundaries.
+Other pause types and AI profiles can change the overall playback pattern.
+
 ### Build as App (optional)
 
 To create a standalone `Ghost Typer.app`:
