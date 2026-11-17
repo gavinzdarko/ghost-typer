@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from collections import OrderedDict
@@ -82,6 +83,7 @@ Rules:
 - Pauses should vary: 0.3-1.5s between sentences, 1-4s between paragraphs, 2-8s for "thinking"
 - Rewrites should be natural — type a plausible but slightly worse version first, then fix it
 - Speed multipliers: 0.5 = very slow/careful, 1.0 = normal, 1.5 = fast burst
+- Speed changes apply to subsequent type and rewrite text until the next speed_change, across segments. Start at 1.0; use multipliers from 0.5 to 1.5. Mistake corrections retain their own timing.
 - Don't overdo mistakes — real humans make typos on roughly 3-5% of words
 - Make the typing feel ALIVE, not mechanical
 - When splitting text across multiple type actions, the trailing space after punctuation MUST be included (e.g. "Hello. " not "Hello.")
@@ -239,6 +241,8 @@ Include {(max(1, int(word_count * self.settings.error_rate)) if self.settings.er
         """Convert Claude's JSON plan into a TypingPlan with proper TypingActions."""
         actions: list[TypingAction] = []
         total_chars = 0
+        speed_multiplier = 1.0
+        estimated_character_units = 0.0
 
         # Resolve styles by source position. Identical words can occur with
         # different formatting, so text-keyed/fuzzy lookups lose information.
@@ -283,9 +287,23 @@ Include {(max(1, int(word_count * self.settings.error_rate)) if self.settings.er
             # Process each action in the segment
             for act in seg_actions:
                 act_type = act.get("type", "")
+                if act_type == "speed_change":
+                    value = act.get("multiplier", 1.0)
+                    if (isinstance(value, bool) or not isinstance(value, (int, float))
+                            or not math.isfinite(value) or value <= 0):
+                        raise ValueError("AI speed multiplier must be finite and positive")
+                    speed_multiplier = max(0.5, min(value, 1.5))
+                    continue
                 new_actions, chars = self._convert_action(act)
+                self._set_text_speed(new_actions, speed_multiplier)
                 actions.extend(new_actions)
                 total_chars += chars
+                # This remains a source-length estimate; correction gestures
+                # and pauses have their own timing, independent of text speed.
+                estimated_character_units += (chars / speed_multiplier
+                                              if act_type in ("type", "rewrite")
+                                              or (act_type == "mistake" and self.settings.error_rate <= 0)
+                                              else chars)
 
             if self._render_actions(actions[segment_start:]) != seg_text:
                 raise ValueError("AI segment actions differ from the declared text")
@@ -297,7 +315,7 @@ Include {(max(1, int(word_count * self.settings.error_rate)) if self.settings.er
 
         # Calculate estimated duration
         chars_per_sec = (self.settings.wpm * 5) / 60
-        est_duration = total_chars / chars_per_sec if chars_per_sec > 0 else 0
+        est_duration = estimated_character_units / chars_per_sec if chars_per_sec > 0 else 0
 
         # Model instructions are not a guarantee: replay edits before allowing
         # any generated keystrokes to touch the destination document.
@@ -384,15 +402,15 @@ Include {(max(1, int(word_count * self.settings.error_rate)) if self.settings.er
                 ))
                 chars += len(final_version)
 
-        elif act_type == "speed_change":
-            # Speed changes are handled implicitly through pause durations
-            # We could add a micro-pause for slowdown
-            multiplier = float(act.get("multiplier", 1.0))
-            if multiplier < 0.8:
-                # Slowing down — add a tiny thinking pause
-                actions.append(Pause(duration=0.3))
-
         return actions, chars
+
+    @staticmethod
+    def _set_text_speed(actions: list[TypingAction], multiplier: float) -> None:
+        for action in actions:
+            if isinstance(action, TypeText):
+                action.speed_multiplier = multiplier
+            elif isinstance(action, Rewrite):
+                AIPlanner._set_text_speed(action.new_actions, multiplier)
 
     @staticmethod
     def _validate_edit_text(*texts: str) -> None:
