@@ -82,7 +82,12 @@ class TextParser:
         Strips all formatting (bold, italic, links, colors) so the typed text
         inherits the destination's style. Also removes citation markers like [1][2].
         """
-        soup = BeautifulSoup(html, "html.parser")
+        # Keep raw text nodes until our CSS-aware walk decides whether to
+        # collapse them. BeautifulSoup otherwise replaces whitespace-only
+        # descendants with one space/newline before inherited white-space:
+        # pre/pre-wrap can preserve them. The document root stays open for
+        # the entire parse, including fragments and custom inline elements.
+        soup = BeautifulSoup(html, "html.parser", preserve_whitespace_tags={BeautifulSoup.ROOT_TAG_NAME})
 
         # HTML ignores one line feed immediately after a PRE start tag.
         # html.parser leaves it in the DOM; do not turn source indentation
