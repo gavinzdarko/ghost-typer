@@ -469,7 +469,8 @@ class TypingPlanner:
                 if self._rng.random() < self.settings.proofread_probability:
                     proof_actions = self._build_proofread(
                         emitted.typos, len(emitted),
-                        known_text=emitted.text if emitted.valid else "",
+                        known_text=(emitted.suffix(self.profile.proofread.max_proofread_distance)
+                                    if emitted.valid else ""),
                     )
                     actions.extend(proof_actions)
 

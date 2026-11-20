@@ -35,6 +35,19 @@ class PlannedText:
     def __len__(self):
         return self._length
 
+    def suffix(self, limit):
+        """Read recent text without materializing the growing document."""
+        remaining = max(0, limit)
+        pieces = []
+        for piece in reversed(self._appends):
+            if not remaining:
+                break
+            pieces.append(piece[-remaining:])
+            remaining -= min(remaining, len(piece))
+        if remaining:
+            pieces.append(self._text[-remaining:])
+        return "".join(reversed(pieces))
+
     def _insert(self, text):
         start, end = sorted((self.cursor, self.anchor if self.anchor is not None else self.cursor))
         self._replace(start, end, text)
@@ -60,6 +73,26 @@ class PlannedText:
                 self._text = self._text[:-remaining]
             if text:
                 self._appends.append(text)
+        elif start >= len(self._text):
+            # Relative proofreading edits usually touch only buffered recent
+            # text. Keep the untouched prefix buffered as well: materializing
+            # it for each sentence makes long-document planning quadratic.
+            remaining = self._length - start
+            pieces = []
+            while remaining and self._appends:
+                last = self._appends.pop()
+                if len(last) > remaining:
+                    self._appends.append(last[:-remaining])
+                    pieces.append(last[-remaining:])
+                    remaining = 0
+                else:
+                    pieces.append(last)
+                    remaining -= len(last)
+            tail = "".join(reversed(pieces))[end - start:]
+            if text:
+                self._appends.append(text)
+            if tail:
+                self._appends.append(tail)
         else:
             current = self.text
             self._text = current[:start] + text + current[end:]
